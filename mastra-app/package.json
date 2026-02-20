@@ -1,0 +1,53 @@
+{
+  "name": "mastra-app",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run __tests__/unit",
+    "test:property": "vitest run __tests__/property",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.2.0",
+    "@mastra/mcp": "^1.0.0",
+    "@types/leaflet": "^1.9.21",
+    "highlight.js": "^11.11.1",
+    "leaflet": "^1.9.4",
+    "mermaid": "^11.12.2",
+    "next": "16.1.6",
+    "oci-common": "^2.125.0",
+    "oci-generativeaiinference": "^2.125.0",
+    "oracledb": "^6.10.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-leaflet": "^5.0.0",
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.7.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^20.19.31",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "fast-check": "^4.5.3",
+    "jsdom": "^28.1.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.0.18"
+  }
+}
