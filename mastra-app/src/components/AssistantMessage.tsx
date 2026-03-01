@@ -76,17 +76,21 @@ function formatFullTime(date: Date): string {
 }
 
 /**
- * StreamingCursor - Blinking cursor shown at end of streaming text
- * Validates: Requirements 7.2 - Blinking cursor at end during streaming
+ * StreamingCursor - Pulsating cursor shown at end of streaming text
+ * Validates: Requirements 16.3 - Pulsating cursor during streaming
+ * Validates: Requirements 16.6 - Smooth fade-out on completion
  */
-export function StreamingCursor() {
+export function StreamingCursor({ isFadingOut = false }: { isFadingOut?: boolean }) {
   return (
     <span 
       className="inline-block w-0.5 h-4 ml-0.5"
       style={{ 
         background: 'var(--accent)',
         verticalAlign: 'text-bottom',
-        animation: 'cursor-blink 1s step-end infinite'
+        animation: isFadingOut 
+          ? 'cursor-fadeOut 0.3s ease-out forwards' 
+          : 'cursor-pulse 1.2s ease-in-out infinite',
+        transformOrigin: 'center'
       }}
       data-testid="streaming-cursor"
       aria-hidden="true"
@@ -96,9 +100,10 @@ export function StreamingCursor() {
 
 /**
  * StreamingText - Component for rendering streaming text with cursor animation
- * Validates: Requirements 2.2, 2.4
+ * Validates: Requirements 2.2, 2.4, 16.6
  * - 2.2: Character-by-character streaming with smooth animation
  * - 2.4: Remove streaming indicators when response is complete
+ * - 16.6: Smooth fade-out animation on completion
  */
 export interface StreamingTextProps {
   /** The content to display */
@@ -109,7 +114,18 @@ export interface StreamingTextProps {
 
 export function StreamingText({ content, isStreaming }: StreamingTextProps) {
   const [displayedContent, setDisplayedContent] = useState('');
+  const [isFadingOut, setIsFadingOut] = useState(false);
   const targetContentRef = useRef<string>(content);
+  const wasStreamingRef = useRef<boolean>(isStreaming);
+  
+  // Detect when streaming stops to trigger fade-out
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) {
+      // Streaming just stopped - trigger fade-out
+      setIsFadingOut(true);
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
   
   useEffect(() => {
     targetContentRef.current = content;
@@ -144,14 +160,15 @@ export function StreamingText({ content, isStreaming }: StreamingTextProps) {
   useEffect(() => {
     if (content === '' && displayedContent !== '') {
       setDisplayedContent('');
+      setIsFadingOut(false);
     }
   }, [content, displayedContent]);
   
   return (
     <span className="streaming-text" data-testid="streaming-text">
       <MarkdownRenderer content={displayedContent} />
-      {/* Show cursor only when streaming is active - Validates: Requirements 2.4 */}
-      {isStreaming && <StreamingCursor />}
+      {/* Show cursor only when streaming is active - Validates: Requirements 2.4, 16.6 */}
+      {isStreaming && <StreamingCursor isFadingOut={isFadingOut} />}
     </span>
   );
 }

@@ -20,7 +20,7 @@ export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
         style={{
           background: 'var(--bg-secondary)',
           color: 'var(--text-secondary)',
-          border: '1px solid var(--border-color)',
+          border: 'none',
         }}
       >
         <svg 
@@ -74,7 +74,7 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
       {expanded && (
         <div 
           className="mt-1 ml-5 p-3 rounded-lg text-xs font-mono overflow-x-auto" 
-          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}
+          style={{ background: 'var(--bg-secondary)', border: 'none' }}
         >
           <pre style={{ color: 'var(--text-primary)' }}>{JSON.stringify(toolCall.arguments, null, 2)}</pre>
         </div>

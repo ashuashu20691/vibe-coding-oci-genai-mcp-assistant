@@ -12,10 +12,10 @@ describe('Visualization Agent', () => {
       const result = await generateVisualization({ data: [] });
 
       expect(result.type).toBe('table');
-      const content = JSON.parse(result.content);
-      expect(content.type).toBe('table');
-      expect(content.columns).toEqual([]);
-      expect(content.data).toEqual([]);
+      // Content is now HTML, not JSON
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
+      expect(result.content).toContain('Data Table');
     });
 
     it('should generate bar chart when requested', async () => {
@@ -31,10 +31,11 @@ describe('Visualization Agent', () => {
       });
 
       expect(result.type).toBe('bar_chart');
-      const content = JSON.parse(result.content);
-      expect(content.type).toBe('bar_chart');
-      expect(content.title).toBe('Test Bar Chart');
-      expect(content.data).toEqual(data);
+      // Content is now HTML with Chart.js, not JSON
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
+      expect(result.content).toContain('Test Bar Chart');
+      expect(result.content).toContain('chart.js'); // CDN link
     });
 
     it('should generate line chart when requested', async () => {
@@ -50,9 +51,11 @@ describe('Visualization Agent', () => {
       });
 
       expect(result.type).toBe('line_chart');
-      const content = JSON.parse(result.content);
-      expect(content.type).toBe('line_chart');
-      expect(content.title).toBe('Test Line Chart');
+      // Content is now HTML with Chart.js, not JSON
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
+      expect(result.content).toContain('Test Line Chart');
+      expect(result.content).toContain('chart.js'); // CDN link
     });
 
     it('should generate pie chart when requested', async () => {
@@ -68,8 +71,11 @@ describe('Visualization Agent', () => {
       });
 
       expect(result.type).toBe('pie_chart');
-      const content = JSON.parse(result.content);
-      expect(content.type).toBe('pie_chart');
+      // Content is now HTML with Chart.js, not JSON
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
+      expect(result.content).toContain('Test Pie Chart');
+      expect(result.content).toContain('chart.js'); // CDN link
     });
 
     it('should generate table when requested', async () => {
@@ -85,10 +91,12 @@ describe('Visualization Agent', () => {
       });
 
       expect(result.type).toBe('table');
-      const content = JSON.parse(result.content);
-      expect(content.type).toBe('table');
-      expect(content.columns).toContain('id');
-      expect(content.columns).toContain('name');
+      // Content is now HTML, not JSON
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
+      expect(result.content).toContain('Test Table');
+      expect(result.content).toContain('id');
+      expect(result.content).toContain('name');
     });
 
     it('should generate interactive HTML when requested', async () => {
@@ -166,8 +174,9 @@ describe('Visualization Agent', () => {
         options,
       });
 
-      const content = JSON.parse(result.content);
-      expect(content.options).toEqual(options);
+      // Content is now HTML, options are embedded in the HTML/metadata
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toContain('<!DOCTYPE html>');
     });
 
     it('should handle non-object array data', async () => {

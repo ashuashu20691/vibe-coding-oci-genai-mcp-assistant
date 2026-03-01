@@ -28,3 +28,5 @@ export type {
   ResponsiveState,
   UseResponsiveOptions,
 } from './useResponsive';
+export { useArtifacts } from './useArtifacts';
+export type { UseArtifactsReturn } from './useArtifacts';

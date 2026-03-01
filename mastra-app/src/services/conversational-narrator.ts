@@ -24,8 +24,9 @@ export class ConversationalNarrator {
   private verboseMode: boolean;
 
   constructor() {
-    // Check environment variable - default to false for clean Claude Desktop style
-    this.verboseMode = process.env.ENABLE_VERBOSE_NARRATION === 'true';
+    // Default to true per Requirements 13 and 18.3 - tool details SHALL appear as conversational text
+    // Can be disabled by setting ENABLE_VERBOSE_NARRATION=false
+    this.verboseMode = process.env.ENABLE_VERBOSE_NARRATION !== 'false';
   }
 
   /**

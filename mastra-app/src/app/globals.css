@@ -10,6 +10,10 @@
    ========================================================================== */
 
 :root {
+  /* Typography - Inter primary, Geist fallback, system fonts */
+  --font-sans: var(--font-inter), 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-base-size: 16px;
+  
   /* Breakpoints (reference) */
   --breakpoint-mobile: 768px;
   --breakpoint-tablet: 1024px;
@@ -38,9 +42,9 @@
   --bg-secondary: #f7f7f8;
   --bg-tertiary: #eeeeef;
   --bg-sidebar: #f8f9fa;
-  --text-primary: #2e2e2e;
-  --text-secondary: #525252;
-  --text-muted: #8e8e8e;
+  --text-primary: #000000;
+  --text-secondary: #404040;
+  --text-muted: #737373;
   --border-color: #e0e0e0;
   --border-subtle: #f0f1f3;
   --accent: #0f766e;
@@ -118,7 +122,8 @@ html, body {
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--font-base-size);
   background: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.6;
@@ -155,7 +160,7 @@ body {
   flex-shrink: 0;
   height: 100vh;
   background: var(--bg-sidebar);
-  border-right: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-subtle);
   transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   display: flex;
@@ -191,12 +196,10 @@ body {
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 8px rgba(15, 118, 110, 0.25);
 }
 
 .copilot-new-chat-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(15, 118, 110, 0.35);
+  opacity: 0.9;
 }
 
 .copilot-new-chat-btn:active {
@@ -233,7 +236,7 @@ body {
   font-size: 13px;
   color: var(--text-secondary);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: left;
@@ -247,7 +250,6 @@ body {
 .copilot-conv-item.active {
   background: var(--accent-bg);
   color: var(--accent);
-  border-color: rgba(15, 118, 110, 0.15);
   font-weight: 500;
 }
 
@@ -294,7 +296,7 @@ body {
   justify-content: space-between;
   height: 52px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-primary);
   flex-shrink: 0;
 }
@@ -312,17 +314,16 @@ body {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .copilot-sidebar-toggle:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
   color: var(--text-primary);
-  border-color: var(--text-muted);
 }
 
 .copilot-header-title {
@@ -361,7 +362,7 @@ body {
   font-weight: 500;
   color: var(--text-secondary);
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: none;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -369,7 +370,6 @@ body {
 .copilot-model-btn:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  border-color: var(--text-muted);
 }
 
 /* ==========================================================================
@@ -410,7 +410,6 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 20px rgba(15, 118, 110, 0.3);
 }
 
 @keyframes orb-pulse {
@@ -450,7 +449,7 @@ body {
   border-radius: 12px;
   text-align: left;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: none;
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
@@ -459,9 +458,6 @@ body {
 
 .welcome-suggestion-btn:hover {
   background: var(--accent-bg);
-  border-color: rgba(15, 118, 110, 0.2);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
 }
 
 .welcome-suggestion-btn:hover .welcome-suggestion-arrow {
@@ -525,7 +521,7 @@ body {
    ========================================================================== */
 
 .copilot-input-area {
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--border-subtle);
   background: var(--bg-primary);
   flex-shrink: 0;
 }
@@ -549,7 +545,7 @@ body {
   font-size: 14px;
   line-height: 1.5;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: none;
   color: var(--text-primary);
   transition: all 0.2s ease;
   font-family: inherit;
@@ -560,8 +556,6 @@ body {
 }
 
 .copilot-input:focus {
-  border-color: var(--accent);
-  box-shadow: var(--input-shadow);
   background: var(--bg-primary);
 }
 
@@ -585,12 +579,10 @@ body {
 .copilot-send-btn:not(:disabled) {
   background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: white;
-  box-shadow: 0 2px 8px rgba(15, 118, 110, 0.25);
 }
 
 .copilot-send-btn:not(:disabled):hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 14px rgba(15, 118, 110, 0.35);
+  opacity: 0.9;
 }
 
 .copilot-send-btn:disabled {
@@ -1187,13 +1179,41 @@ body {
    Animations
    ========================================================================== */
 
-@keyframes cursor-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+@keyframes cursor-pulse {
+  0%, 100% { 
+    opacity: 1; 
+    transform: scaleY(1);
+  }
+  50% { 
+    opacity: 0.4; 
+    transform: scaleY(0.8);
+  }
+}
+
+@keyframes cursor-fadeOut {
+  from {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  to {
+    opacity: 0;
+    transform: scaleY(0.5);
+  }
+}
+
+@keyframes progressFadeOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
 }
 
 .streaming-cursor {
-  animation: cursor-blink 1s step-end infinite;
+  animation: cursor-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes typing-dot {

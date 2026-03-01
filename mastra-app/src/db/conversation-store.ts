@@ -56,6 +56,7 @@ interface ConversationRow {
   CREATED_AT: Date;
   UPDATED_AT: Date;
   MODEL_ID: string | null;
+  ACTIVE_ARTIFACT: string | null;
 }
 
 /**
@@ -274,17 +275,17 @@ export class ConversationStore {
     await this.ensureInitialized();
 
     try {
-      // Try with model_id first, fall back to without if column doesn't exist
+      // Try with model_id and active_artifact first, fall back to without if columns don't exist
       let rows: ConversationRow[];
       try {
         rows = await executeQuery<ConversationRow>(
-          `SELECT id, title, model_id, created_at, updated_at
+          `SELECT id, title, model_id, active_artifact, created_at, updated_at
            FROM conversations
            WHERE id = :id`,
           { id }
         );
       } catch (error) {
-        // If model_id column doesn't exist, query without it
+        // If columns don't exist, query without them
         if (error instanceof Error && error.message.includes('ORA-00904')) {
           rows = await executeQuery<ConversationRow>(
             `SELECT id, title, created_at, updated_at
@@ -300,10 +301,29 @@ export class ConversationStore {
       if (rows.length === 0) return null;
 
       const row = rows[0];
+      
+      // Parse active artifact if present
+      let activeArtifact = undefined;
+      const artifactStr = row.ACTIVE_ARTIFACT ? toString(row.ACTIVE_ARTIFACT) : null;
+      if (artifactStr) {
+        try {
+          const parsed = JSON.parse(artifactStr);
+          // Deserialize dates
+          activeArtifact = {
+            ...parsed,
+            createdAt: new Date(parsed.createdAt),
+            updatedAt: new Date(parsed.updatedAt),
+          };
+        } catch (error) {
+          console.warn('Failed to parse active artifact:', error);
+        }
+      }
+      
       return {
         id: String(row.ID),
         title: String(row.TITLE),
         modelId: row.MODEL_ID ? String(row.MODEL_ID) : undefined,
+        activeArtifact,
         createdAt: toDate(row.CREATED_AT),
         updatedAt: toDate(row.UPDATED_AT),
       };
@@ -370,6 +390,45 @@ export class ConversationStore {
       throw new SQLExecutionError(
         `Failed to update conversation model: ${error instanceof Error ? error.message : String(error)}`,
         'UPDATE conversations SET model_id',
+        error
+      );
+    }
+  }
+
+  /**
+   * Update a conversation's active artifact.
+   * Validates: Requirement 15.6 - Artifact persistence across turns
+   */
+  async updateConversationArtifact(id: string, artifactJson: string | null): Promise<void> {
+    await this.ensureInitialized();
+
+    try {
+      // Try to update active_artifact, silently handle if column doesn't exist
+      try {
+        await executeStatement(
+          `UPDATE conversations
+           SET active_artifact = :artifactJson, updated_at = SYSTIMESTAMP
+           WHERE id = :id`,
+          { id, artifactJson }
+        );
+      } catch (error) {
+        // If active_artifact column doesn't exist, just update the timestamp
+        if (error instanceof Error && error.message.includes('ORA-00904')) {
+          console.warn('active_artifact column does not exist in conversations table');
+          await executeStatement(
+            `UPDATE conversations
+             SET updated_at = SYSTIMESTAMP
+             WHERE id = :id`,
+            { id }
+          );
+        } else {
+          throw error;
+        }
+      }
+    } catch (error) {
+      throw new SQLExecutionError(
+        `Failed to update conversation artifact: ${error instanceof Error ? error.message : String(error)}`,
+        'UPDATE conversations SET active_artifact',
         error
       );
     }

@@ -8,6 +8,7 @@ import { getMCPTools, getAgentState, updateAgentState } from './database-agent';
 import { analyzeData, type AnalysisResult } from './data-analysis-agent';
 import { generateVisualization, type VisualizationResult } from './visualization-agent';
 import { AnalysisAgent, AnalysisRequest, AnalysisResponse } from './analysis-agent';
+import { IterationStateMachine, type RetryOptions } from '../../services/iteration-state-machine';
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -15,6 +16,8 @@ export interface ToolExecutionResult {
   error?: string;
   analysis?: AnalysisResult;
   visualization?: VisualizationResult;
+  iterationCount?: number;
+  attemptSummaries?: string[];
 }
 
 /**
@@ -24,10 +27,20 @@ export interface ToolExecutionResult {
 export class DatabaseOrchestrator {
   private conversationId: string;
   private modelId: string;
+  private iterationMachine: IterationStateMachine;
+  private onIterationUpdate?: (iteration: number, maxIterations: number) => void;
 
   constructor(conversationId: string, modelId: string) {
     this.conversationId = conversationId;
     this.modelId = modelId;
+    this.iterationMachine = new IterationStateMachine();
+  }
+
+  /**
+   * Set callback for iteration updates during autonomous retry loops
+   */
+  setIterationUpdateCallback(callback: (iteration: number, maxIterations: number) => void): void {
+    this.onIterationUpdate = callback;
   }
 
   /**
@@ -42,6 +55,9 @@ export class DatabaseOrchestrator {
    * Execute a tool with automatic connection management, analysis, and visualization.
    * For SQL operations, ensures a connection exists first, then analyzes results
    * and generates appropriate visualizations.
+   * 
+   * Uses IterationStateMachine for autonomous retry logic (max 5 attempts).
+   * Validates: Requirements 14.1, 14.2, 14.3
    */
   async executeTool(
     toolName: string,
@@ -76,8 +92,71 @@ export class DatabaseOrchestrator {
       }
     }
 
-    // Execute the tool
-    const result = await this.executeToolDirect(normalizedName, args, mcpTools);
+    // Execute the tool with retry logic
+    const retryOptions: RetryOptions = {
+      maxAttempts: 5,
+      onIterationUpdate: this.onIterationUpdate,
+      onFailure: (error: Error, attemptNum: number) => {
+        // Generate alternative strategy based on error
+        console.log(`[Orchestrator] Attempt ${attemptNum} failed: ${error.message}`);
+        
+        // For connection errors, try reconnecting
+        if (error.message.includes('connection') || error.message.includes('not connected')) {
+          return {
+            description: 'Reconnecting to database',
+            operation: async () => {
+              await this.autoConnect(mcpTools);
+              return this.executeToolDirect(normalizedName, args, mcpTools);
+            },
+          };
+        }
+        
+        // For SQL errors, try with different parameter mapping
+        if (error.message.includes('parameter') || error.message.includes('argument')) {
+          return {
+            description: 'Retrying with alternative parameter mapping',
+            operation: () => this.executeToolDirect(normalizedName, args, mcpTools),
+          };
+        }
+        
+        // Default: retry the same operation
+        return {
+          description: 'Retrying operation',
+          operation: () => this.executeToolDirect(normalizedName, args, mcpTools),
+        };
+      },
+      shouldRetry: (error: Error) => {
+        // Don't retry authentication errors
+        if (error.message.includes('authentication') || error.message.includes('unauthorized')) {
+          return false;
+        }
+        return true;
+      },
+    };
+
+    const iterationResult = await this.iterationMachine.executeWithRetry(
+      () => this.executeToolDirect(normalizedName, args, mcpTools),
+      retryOptions
+    );
+
+    // Convert iteration result to tool execution result
+    if (!iterationResult.success) {
+      return {
+        success: false,
+        error: iterationResult.errors.length > 0 
+          ? iterationResult.errors[iterationResult.errors.length - 1].message
+          : 'Tool execution failed after maximum retry attempts',
+        iterationCount: iterationResult.attempts,
+        attemptSummaries: iterationResult.attemptSummaries,
+      };
+    }
+
+    const result: ToolExecutionResult = {
+      success: true,
+      result: iterationResult.data,
+      iterationCount: iterationResult.attempts,
+      attemptSummaries: iterationResult.attemptSummaries,
+    };
 
     // If this was a successful SQL query, analyze and visualize the results
     if (result.success && normalizedName === 'run-sql') {
@@ -214,6 +293,7 @@ export class DatabaseOrchestrator {
 
   /**
    * Execute a tool directly without connection checks.
+   * Returns the raw result for use with IterationStateMachine.
    */
   private async executeToolDirect(
     toolName: string,
@@ -240,51 +320,41 @@ export class DatabaseOrchestrator {
     }
 
     if (!tool?.execute) {
-      return {
-        success: false,
-        error: `Tool '${toolName}' not found. Available: ${Object.keys(mcpTools).join(', ')}`,
-      };
+      throw new Error(`Tool '${toolName}' not found. Available: ${Object.keys(mcpTools).join(', ')}`);
     }
 
-    try {
-      // Map incorrect parameter names to correct ones
-      const mappedArgs = this.mapToolParameters(foundName, args);
-      
-      // Add required MCP parameters
-      const fullArgs = {
-        mcp_client: 'oci-genai-chat',
-        model: this.modelId,
-        ...mappedArgs,
-      };
+    // Map incorrect parameter names to correct ones
+    const mappedArgs = this.mapToolParameters(foundName, args);
+    
+    // Add required MCP parameters
+    const fullArgs = {
+      mcp_client: 'oci-genai-chat',
+      model: this.modelId,
+      ...mappedArgs,
+    };
 
-      console.log(`[Orchestrator] Executing: ${foundName}`, fullArgs);
-      const result = await tool.execute(fullArgs);
-      console.log(`[Orchestrator] Result:`, JSON.stringify(result).slice(0, 500));
+    console.log(`[Orchestrator] Executing: ${foundName}`, fullArgs);
+    const result = await tool.execute(fullArgs);
+    console.log(`[Orchestrator] Result:`, JSON.stringify(result).slice(0, 500));
 
-      // Track connection state
-      if (foundName === 'connect' && mappedArgs.connection_name) {
-        updateAgentState(this.conversationId, {
-          activeConnection: mappedArgs.connection_name as string,
-        });
-      }
-      if (foundName === 'disconnect') {
-        updateAgentState(this.conversationId, { activeConnection: null });
-      }
-
-      // Check for errors in result
-      const resultObj = result as { isError?: boolean; content?: Array<{ text?: string }> };
-      if (resultObj?.isError) {
-        const errorText = resultObj.content?.[0]?.text || 'Unknown error';
-        return { success: false, error: errorText };
-      }
-
-      return { success: true, result };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
+    // Track connection state
+    if (foundName === 'connect' && mappedArgs.connection_name) {
+      updateAgentState(this.conversationId, {
+        activeConnection: mappedArgs.connection_name as string,
+      });
     }
+    if (foundName === 'disconnect') {
+      updateAgentState(this.conversationId, { activeConnection: null });
+    }
+
+    // Check for errors in result
+    const resultObj = result as { isError?: boolean; content?: Array<{ text?: string }> };
+    if (resultObj?.isError) {
+      const errorText = resultObj.content?.[0]?.text || 'Unknown error';
+      throw new Error(errorText);
+    }
+
+    return { success: true, result };
   }
 
   /**

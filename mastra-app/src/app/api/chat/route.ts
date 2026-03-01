@@ -18,7 +18,8 @@ import { classifyError, logError, formatErrorResponse } from '@/lib/errors';
 import { analyzeData } from '@/mastra/agents/data-analysis-agent';
 import { generateVisualization } from '@/mastra/agents/visualization-agent';
 import { classifyUserIntent, generateClarificationPrompt, SUPERVISOR_AGENT_INSTRUCTIONS } from '@/mastra/agents/supervisor-agent';
-import { conversationalNarrator } from '@/services/conversational-narrator';
+import { createChatService, ENHANCED_SYSTEM_PROMPT } from '@/services/chat-service';
+import { NarrativeStreamingService } from '@/services/narrative-streaming-service';
 
 const config = loadConfig();
 
@@ -382,17 +383,23 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     // AUTONOMOUS MODE: Always use database agent instructions for autonomous operation
     const systemInstructions = DATABASE_AGENT_INSTRUCTIONS;
 
+    // Create narrative streaming service
+    const narrativeService = new NarrativeStreamingService();
+
+    // Create ChatService with narrative integration
+    const chatService = createChatService(modelAdapter, narrativeService, {
+      systemPrompt: systemInstructions,
+      maxIterations: 5,
+    });
+
     const stream = new ReadableStream({
       async start(controller) {
         let fullResponse = '';
         const allToolCalls: ToolCall[] = [];
         const allToolResults: Array<{ toolCallId: string; result: unknown }> = [];
-        let lastToolCall: ToolCall | null = null;
-        let lastToolResult: unknown = null;
         
-        // Collect tool narratives and adaptation narratives for saving
+        // Collect tool narratives for saving
         const toolNarratives: Array<{ toolCallId: string; toolName: string; phase: 'start' | 'result' | 'error'; narrative: string; timestamp: Date }> = [];
-        const adaptationNarratives: string[] = [];
         
         // Progress tracking for multi-step operations
         let currentStepNumber = 0;
@@ -473,11 +480,11 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
 
           const chatMessages = toChatMessages(messages);
 
-          // Use the model adapter with agentic streaming
+          // Configure stream options for tool execution
           const streamOptions = hasTools
             ? {
               toolsets: { sqlcl: mcpTools },
-              maxSteps: 15, // Increased for deep autonomous analysis (connect, explore, multiple queries, analyze)
+              maxSteps: 15, // Increased for deep autonomous analysis
               onStepFinish: (step: { text: string; toolCalls: ToolCall[]; toolResults: Array<{ toolCallId: string; result: unknown }>; finishReason: string }) => {
                 console.log(`[chat] Step finished: ${step.toolCalls.length} tool calls, reason: ${step.finishReason}`);
 
@@ -500,214 +507,134 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
             }
             : {};
 
-          console.log(`[chat/POST] Starting stream with ${chatMessages.length} messages, hasTools: ${hasTools}`);
+          console.log(`[chat/POST] Starting ChatService stream with ${chatMessages.length} messages, hasTools: ${hasTools}`);
 
-          for await (const chunk of modelAdapter.stream(chatMessages, streamOptions)) {
-            console.log(`[chat/POST] Stream chunk type: ${chunk.type}, textDelta: ${chunk.textDelta?.slice(0, 50)}`);
-            switch (chunk.type) {
-              case 'text-delta':
-                if (chunk.textDelta) {
-                  fullResponse += chunk.textDelta;
-                  const data = JSON.stringify({ content: chunk.textDelta });
-                  console.log(`[chat/POST] Sending text chunk: ${data.slice(0, 100)}`);
+          // Use ChatService for narrative-integrated streaming
+          for await (const event of chatService.sendMessageWithNarrative(chatMessages, streamOptions)) {
+            console.log(`[chat/POST] ChatService event type: ${event.type}`);
+            
+            switch (event.type) {
+              case 'narrative':
+                // Stream narrative chunks as content (appears before tool execution)
+                // Validates: Requirements 13.1, 13.2, 13.6
+                if (event.content) {
+                  fullResponse += event.content;
                   controller.enqueue(
-                    encoder.encode(`data: ${data}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({ content: event.content })}\n\n`)
                   );
+                  console.log(`[chat/POST] Streamed narrative: ${event.content.slice(0, 50)}...`);
                 }
                 break;
 
-              case 'tool-call':
-                if (chunk.toolCall) {
+              case 'content':
+                // Pass through assistant response content
+                if (event.content) {
+                  fullResponse += event.content;
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify({ content: event.content })}\n\n`)
+                  );
+                  console.log(`[chat/POST] Streamed content: ${event.content.slice(0, 50)}...`);
+                }
+                break;
+
+              case 'tool_call':
+                // Tool call event with pre-tool narrative already streamed
+                if (event.toolCall) {
                   // Initialize progress tracking on first tool call
                   if (!operationStarted) {
                     operationStarted = true;
-                    // Estimate total steps based on maxSteps (conservative estimate)
-                    // We'll update this as we go
-                    totalSteps = 0; // Will be determined dynamically
+                    totalSteps = 0;
                   }
                   
-                  // Increment step counter
                   currentStepNumber++;
+                  allToolCalls.push(event.toolCall);
                   
-                  // Detect adaptation: if we have a previous tool result, this new tool is informed by it
-                  if (lastToolCall && lastToolResult !== null) {
-                    // Generate adaptation narrative explaining the connection
-                    const adaptationNarrative = conversationalNarrator.narrateAdaptation({
-                      previousAction: lastToolCall.name,
-                      previousResult: lastToolResult,
-                      nextAction: chunk.toolCall.name,
-                      reason: 'follow', // Default reason - could be enhanced with more context
-                    });
-                    
-                    // Collect adaptation narrative for saving
-                    adaptationNarratives.push(adaptationNarrative);
-                    
-                    // Stream the adaptation narrative as conversational content
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ content: adaptationNarrative + '\n\n' })}\n\n`
-                      )
-                    );
-                    
-                    console.log(`[chat/POST] Generated adaptation narrative: ${lastToolCall.name} -> ${chunk.toolCall.name}`);
-                  }
-                  
-                  allToolCalls.push(chunk.toolCall);
-                  lastToolCall = chunk.toolCall;
-                  
-                  // Generate conversational explanation for tool execution start
-                  const toolStartNarrative = conversationalNarrator.narrateToolStart(
-                    chunk.toolCall.name,
-                    chunk.toolCall.arguments || {}
-                  );
-                  
-                  // Collect tool start narrative for saving
-                  toolNarratives.push({
-                    toolCallId: chunk.toolCall.id,
-                    toolName: chunk.toolCall.name,
-                    phase: 'start',
-                    narrative: toolStartNarrative,
-                    timestamp: new Date(),
-                  });
-                  
-                  // Generate progress message if we're in a multi-step operation
-                  // We consider it multi-step if we have more than one tool call
-                  if (currentStepNumber > 1 || allToolCalls.length > 0) {
-                    // Update total steps estimate (current + 1 for potential next step)
-                    totalSteps = Math.max(totalSteps, currentStepNumber + 1);
-                    
-                    const progressMessage = conversationalNarrator.narrateProgress(
-                      currentStepNumber,
-                      totalSteps,
-                      toolStartNarrative
-                    );
-                    
-                    // Stream progress message
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ 
-                          progress: progressMessage + '\n\n',
-                          step: { current: currentStepNumber, total: totalSteps }
-                        })}\n\n`
-                      )
-                    );
-                  } else {
-                    // For single-step operations, just stream the narrative
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ content: toolStartNarrative + '\n\n' })}\n\n`
-                      )
-                    );
-                  }
-                  
-                  // Also send as thinking message for UI compatibility
+                  // Emit iteration_update for working badge
                   controller.enqueue(
                     encoder.encode(
-                      `data: ${JSON.stringify({ thinking: toolStartNarrative })}\n\n`
+                      `data: ${JSON.stringify({
+                        iteration_update: {
+                          current: currentStepNumber,
+                          max: 5,
+                          strategy: `Processing step ${currentStepNumber}...`,
+                        },
+                      })}\n\n`
                     )
                   );
                   
+                  // Store pre-tool narrative (already streamed by ChatService)
+                  if (event.narrative) {
+                    toolNarratives.push({
+                      toolCallId: event.toolCall.id,
+                      toolName: event.toolCall.name,
+                      phase: 'start',
+                      narrative: event.narrative,
+                      timestamp: new Date(),
+                    });
+                  }
+                  
+                  // Emit tool call event for UI
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({
                         toolCall: {
-                          id: chunk.toolCall.id,
-                          name: chunk.toolCall.name,
-                          arguments: chunk.toolCall.arguments,
+                          id: event.toolCall.id,
+                          name: event.toolCall.name,
+                          arguments: event.toolCall.arguments,
                         },
                       })}\n\n`
                     )
                   );
+                  
+                  console.log(`[chat/POST] Tool call: ${event.toolCall.name}`);
                 }
                 break;
 
-              case 'tool-result':
-                if (chunk.toolResult) {
-                  allToolResults.push(chunk.toolResult);
-                  lastToolResult = chunk.toolResult.result;
-
-                  // Get the corresponding tool call
-                  const toolResultId = chunk.toolResult.toolCallId;
-                  const correspondingToolCall = allToolCalls.find(
-                    tc => tc.id === toolResultId
+              case 'tool_result':
+                // Tool result event with post-tool narrative already streamed
+                if (event.result) {
+                  allToolResults.push(event.result);
+                  
+                  // Find corresponding tool call
+                  const toolCall = allToolCalls.find(
+                    tc => tc.id === event.result.toolCallId
                   );
                   
-                  // Generate conversational explanation for tool result
-                  if (correspondingToolCall) {
-                    const toolResultNarrative = conversationalNarrator.narrateToolResult(
-                      correspondingToolCall.name,
-                      chunk.toolResult.result
-                    );
-                    
-                    // Collect tool result narrative for saving
+                  // Store post-tool narrative (already streamed by ChatService)
+                  if (toolCall && event.narrative) {
                     toolNarratives.push({
-                      toolCallId: chunk.toolResult.toolCallId,
-                      toolName: correspondingToolCall.name,
+                      toolCallId: event.result.toolCallId,
+                      toolName: toolCall.name,
                       phase: 'result',
-                      narrative: toolResultNarrative,
+                      narrative: event.narrative,
                       timestamp: new Date(),
                     });
-                    
-                    // Stream the conversational explanation as content
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ content: toolResultNarrative + '\n\n' })}\n\n`
-                      )
-                    );
-                    
-                    // Also send as progress message for UI compatibility
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ progress: toolResultNarrative })}\n\n`
-                      )
-                    );
                   }
-
-                  // Check if this is a list_connections result - if so, we need to stop and ask user
-                  const currentToolCall = allToolCalls[allToolCalls.length - 1];
-                  if (currentToolCall?.name?.includes('list') && currentToolCall?.name?.includes('connection')) {
-                    listedConnections = true;
-                    console.log('[chat/POST] Detected list_connections - will prompt user to select database');
-                  }
-
+                  
                   // Truncate large results for display
-                  let resultJson = JSON.stringify(chunk.toolResult.result, null, 2);
+                  let resultJson = JSON.stringify(event.result.content, null, 2);
                   if (resultJson.length > 5000) {
                     resultJson = resultJson.slice(0, 5000) + '\n... (truncated)';
                   }
 
+                  // Emit tool result event for UI
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({
                         toolResult: {
-                          toolCallId: chunk.toolResult.toolCallId,
-                          result: chunk.toolResult.result,
+                          toolCallId: event.result.toolCallId,
+                          result: event.result.content,
                         },
                       })}\n\n`
                     )
                   );
 
-                  // AUTONOMOUS MODE: Don't stop after listing connections
-                  // The agent will auto-connect to the first/only database
-                  // Only inform user if multiple databases are available
-                  if (listedConnections) {
-                    const resultObj = chunk.toolResult.result as { content?: Array<{ text?: string }> };
-                    const connectionText = resultObj?.content?.[0]?.text || '';
-                    const connectionLines = connectionText.split('\n').filter((l: string) => l.trim());
-                    
-                    // If multiple connections, let agent decide or inform user
-                    if (connectionLines.length > 2) {
-                      console.log('[chat/POST] Multiple connections available, agent will choose');
-                    }
-                    // Don't force stop - let agent continue autonomously
-                  }
-
                   // Auto-generate visualization for SQL results
-                  const data = extractDataFromToolResult(chunk.toolResult.result);
+                  const data = extractDataFromToolResult(event.result.content);
                   if (data && data.length > 0) {
-                    lastQueryData = data; // Store for potential visualization request
+                    lastQueryData = data;
                     try {
-                      // Generate analysis only - let user request specific visualization
+                      // Generate analysis
                       const analysis = analyzeData({ data, query: 'SQL query' });
                       controller.enqueue(
                         encoder.encode(
@@ -715,8 +642,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                         )
                       );
 
-                      // Only generate visualization if user explicitly requested it
-                      // Check if user asked for visualization, chart, graph, dashboard, etc.
+                      // Check if visualization was requested
                       const isVisualizationRequested = userIntent.visualizationType || 
                         lastUserMessageOriginal.toLowerCase().match(/\b(visuali[sz]e|chart|graph|plot|dashboard|show.*visual|create.*visual)\b/);
                       
@@ -763,31 +689,72 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                           )
                         );
                         console.log(`[chat/POST] Generated ${viz.type} visualization as requested`);
-                      } else {
-                        console.log(`[chat/POST] Data retrieved but no visualization requested`);
                       }
                     } catch (vizError) {
                       console.error('[chat/POST] Analysis error:', vizError);
                     }
                   }
+                  
+                  console.log(`[chat/POST] Tool result for: ${event.result.toolCallId}`);
                 }
                 break;
 
-              case 'finish':
+              case 'iteration_update':
+                // Iteration update for autonomous retry loops
+                // Emit for UI progress indicators
+                controller.enqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({
+                      iteration_update: {
+                        current: event.iteration,
+                        max: event.maxIterations,
+                        strategy: `Attempt ${event.iteration} of ${event.maxIterations}`,
+                      },
+                    })}\n\n`
+                  )
+                );
+                console.log(`[chat/POST] Iteration update: ${event.iteration}/${event.maxIterations}`);
+                break;
+
+              case 'error':
+                // Error event with error narrative already streamed
+                if (event.error) {
+                  // Find current tool call for narrative storage
+                  const currentToolCall = allToolCalls[allToolCalls.length - 1];
+                  if (currentToolCall && event.narrative) {
+                    toolNarratives.push({
+                      toolCallId: currentToolCall.id,
+                      toolName: currentToolCall.name,
+                      phase: 'error',
+                      narrative: event.narrative,
+                      timestamp: new Date(),
+                    });
+                  }
+                  
+                  // Emit error event for UI
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({
+                        error: event.error,
+                        isRetryable: true,
+                      })}\n\n`
+                    )
+                  );
+                  
+                  console.log(`[chat/POST] Error: ${event.error}`);
+                }
+                break;
+
+              case 'done':
+                // Completion event
                 // If this was a multi-step operation, send completion summary
                 if (currentStepNumber > 1) {
-                  // Finalize total steps to actual count
                   totalSteps = currentStepNumber;
-                  
-                  const completionMessage = conversationalNarrator.narrateCompletion(
-                    totalSteps,
-                    `I've processed your request through ${totalSteps} steps.`
-                  );
                   
                   controller.enqueue(
                     encoder.encode(
                       `data: ${JSON.stringify({ 
-                        progress: completionMessage + '\n\n',
+                        progress: `Completed ${totalSteps} steps.\n\n`,
                         step: { current: totalSteps, total: totalSteps }
                       })}\n\n`
                     )
@@ -796,50 +763,10 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                 
                 controller.enqueue(
                   encoder.encode(
-                    `data: ${JSON.stringify({ finishReason: chunk.finishReason })}\n\n`
+                    `data: ${JSON.stringify({ finishReason: event.finishReason })}\n\n`
                   )
                 );
-                break;
-
-              case 'error':
-                // Generate conversational error explanation
-                const errorValue: unknown = chunk.error ?? 'Unknown error';
-                const errorObj = errorValue instanceof Error 
-                  ? errorValue 
-                  : new Error(String(errorValue));
-                const currentToolCall = allToolCalls[allToolCalls.length - 1];
-                
-                if (currentToolCall) {
-                  const errorNarrative = conversationalNarrator.narrateToolError(
-                    currentToolCall.name,
-                    errorObj
-                  );
-                  
-                  // Collect tool error narrative for saving
-                  toolNarratives.push({
-                    toolCallId: currentToolCall.id,
-                    toolName: currentToolCall.name,
-                    phase: 'error',
-                    narrative: errorNarrative,
-                    timestamp: new Date(),
-                  });
-                  
-                  // Stream the conversational error explanation as content
-                  controller.enqueue(
-                    encoder.encode(
-                      `data: ${JSON.stringify({ content: errorNarrative + '\n\n' })}\n\n`
-                    )
-                  );
-                }
-                
-                controller.enqueue(
-                  encoder.encode(
-                    `data: ${JSON.stringify({
-                      error: chunk.error,
-                      isRetryable: true,
-                    })}\n\n`
-                  )
-                );
+                console.log(`[chat/POST] Stream finished: ${event.finishReason}`);
                 break;
             }
           }
@@ -853,9 +780,8 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                 timestamp: new Date(),
                 toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
                 toolNarratives: toolNarratives.length > 0 ? toolNarratives : undefined,
-                adaptationNarratives: adaptationNarratives.length > 0 ? adaptationNarratives : undefined,
               });
-              console.log(`[chat] Saved assistant message to conversation ${conversationId} with ${toolNarratives.length} tool narratives and ${adaptationNarratives.length} adaptation narratives`);
+              console.log(`[chat] Saved assistant message to conversation ${conversationId} with ${toolNarratives.length} tool narratives`);
             } catch (e) {
               logError('chat/saveMessage', e, { conversationId });
             }
@@ -867,32 +793,8 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           const appError = classifyError(error);
           logError('chat/stream', error, { modelId, conversationId });
 
-          // Generate conversational error explanation
-          const errorObj = error instanceof Error ? error : new Error(String(error));
-          const currentToolCall = allToolCalls[allToolCalls.length - 1];
-          
-          if (currentToolCall) {
-            const errorNarrative = conversationalNarrator.narrateToolError(
-              currentToolCall.name,
-              errorObj
-            );
-            
-            // Stream the conversational error explanation as content
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ content: errorNarrative + '\n\n' })}\n\n`
-              )
-            );
-          } else {
-            // Generic error narrative when no tool call is involved
-            const genericErrorNarrative = `I encountered an issue while processing your request. ${appError.isRetryable ? "Let me try a different approach." : "Please try again or rephrase your request."}`;
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ content: genericErrorNarrative + '\n\n' })}\n\n`
-              )
-            );
-          }
-
+          // Error narrative is already handled by ChatService
+          // Just emit the error event for UI
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orders Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+    
+    .filters {
+      padding: 20px 30px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #dee2e6;
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    
+    .filter-group label {
+      font-size: 0.85em;
+      font-weight: 600;
+      color: #495057;
+    }
+    
+    .filter-group input,
+    .filter-group select {
+      padding: 8px 12px;
+      border: 1px solid #ced4da;
+      border-radius: 6px;
+      font-size: 0.95em;
+    }
+    
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      padding: 30px;
+      background: #f8f9fa;
+    }
+    
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+    
+    .stat-card .value {
+      font-size: 2em;
+      font-weight: bold;
+      color: #667eea;
+      margin-bottom: 5px;
+    }
+    
+    .stat-card .label {
+      font-size: 0.9em;
+      color: #6c757d;
+    }
+    
+    .table-container {
+      padding: 30px;
+      overflow-x: auto;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+    }
+    
+    thead {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    th {
+      padding: 15px;
+      text-align: left;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }
+    
+    th:hover {
+      background: rgba(255,255,255,0.1);
+    }
+    
+    td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #dee2e6;
+    }
+    
+    tbody tr:hover {
+      background: #f8f9fa;
+    }
+    
+    .no-data {
+      text-align: center;
+      padding: 40px;
+      color: #6c757d;
+      font-size: 1.1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Orders Dashboard</h1>
+      <p>Filter and explore your data</p>
+    </div>
+    
+    <div class="filters">
+      <div class="filter-group">
+        <label>Search</label>
+        <input type="text" id="searchInput" placeholder="Search all columns...">
+      </div>
+      
+      <div class="filter-group">
+        <label>ORDER_ID</label>
+        <select id="filter_ORDER_ID">
+          <option value="">All</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label>CUSTOMER_ID</label>
+        <select id="filter_CUSTOMER_ID">
+          <option value="">All</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label>ORDER_DATE</label>
+        <select id="filter_ORDER_DATE">
+          <option value="">All</option>
+        </select>
+      </div>
+      
+      <div class="filter-group">
+        <label>TOTAL_AMOUNT</label>
+        <select id="filter_TOTAL_AMOUNT">
+          <option value="">All</option>
+        </select>
+      </div>
+      
+    </div>
+    
+    <div class="stats">
+      <div class="stat-card">
+        <div class="value" id="totalCount">0</div>
+        <div class="label">Total Records</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="filteredCount">0</div>
+        <div class="label">Filtered Records</div>
+      </div>
+    </div>
+    
+    <div class="table-container">
+      <table id="dataTable">
+        <thead>
+          <tr>
+            <th onclick="sortTable('ORDER_ID')">ORDER_ID ▼</th><th onclick="sortTable('CUSTOMER_ID')">CUSTOMER_ID ▼</th><th onclick="sortTable('ORDER_DATE')">ORDER_DATE ▼</th><th onclick="sortTable('TOTAL_AMOUNT')">TOTAL_AMOUNT ▼</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody">
+        </tbody>
+      </table>
+      <div id="noData" class="no-data" style="display: none;">
+        No data matches your filters
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const data = [{"ORDER_ID":1,"CUSTOMER_ID":101,"ORDER_DATE":"15-01-23","TOTAL_AMOUNT":150.75},{"ORDER_ID":2,"CUSTOMER_ID":102,"ORDER_DATE":"16-01-23","TOTAL_AMOUNT":200},{"ORDER_ID":3,"CUSTOMER_ID":101,"ORDER_DATE":"17-01-23","TOTAL_AMOUNT":50.25},{"ORDER_ID":4,"CUSTOMER_ID":103,"ORDER_DATE":"18-01-23","TOTAL_AMOUNT":300.5},{"ORDER_ID":5,"CUSTOMER_ID":102,"ORDER_DATE":"19-01-23","TOTAL_AMOUNT":75}];
+    const columns = ["ORDER_ID","CUSTOMER_ID","ORDER_DATE","TOTAL_AMOUNT"];
+    let filteredData = [...data];
+    let sortColumn = null;
+    let sortAsc = true;
+    
+    // Initialize
+    function init() {
+      populateFilters();
+      renderTable();
+      updateStats();
+      
+      document.getElementById('searchInput').addEventListener('input', applyFilters);
+      columns.forEach(col => {
+        document.getElementById('filter_' + col).addEventListener('change', applyFilters);
+      });
+    }
+    
+    // Populate filter dropdowns
+    function populateFilters() {
+      columns.forEach(col => {
+        const select = document.getElementById('filter_' + col);
+        const uniqueValues = [...new Set(data.map(row => row[col]))].sort();
+        uniqueValues.forEach(val => {
+          const option = document.createElement('option');
+          option.value = val;
+          option.textContent = val;
+          select.appendChild(option);
+        });
+      });
+    }
+    
+    // Apply filters
+    function applyFilters() {
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+      
+      filteredData = data.filter(row => {
+        // Search filter
+        const matchesSearch = searchTerm === '' || 
+          columns.some(col => String(row[col]).toLowerCase().includes(searchTerm));
+        
+        // Column filters
+        const matchesFilters = columns.every(col => {
+          const filterValue = document.getElementById('filter_' + col).value;
+          return filterValue === '' || String(row[col]) === filterValue;
+        });
+        
+        return matchesSearch && matchesFilters;
+      });
+      
+      renderTable();
+      updateStats();
+    }
+    
+    // Sort table
+    function sortTable(column) {
+      if (sortColumn === column) {
+        sortAsc = !sortAsc;
+      } else {
+        sortColumn = column;
+        sortAsc = true;
+      }
+      
+      filteredData.sort((a, b) => {
+        const aVal = a[column];
+        const bVal = b[column];
+        
+        if (typeof aVal === 'number' && typeof bVal === 'number') {
+          return sortAsc ? aVal - bVal : bVal - aVal;
+        }
+        
+        const aStr = String(aVal);
+        const bStr = String(bVal);
+        return sortAsc ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr);
+      });
+      
+      renderTable();
+    }
+    
+    // Render table
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      const noData = document.getElementById('noData');
+      
+      if (filteredData.length === 0) {
+        tbody.innerHTML = '';
+        noData.style.display = 'block';
+        return;
+      }
+      
+      noData.style.display = 'none';
+      tbody.innerHTML = filteredData.map(row => 
+        '<tr>' + columns.map(col => '<td>' + row[col] + '</td>').join('') + '</tr>'
+      ).join('');
+    }
+    
+    // Update statistics
+    function updateStats() {
+      document.getElementById('totalCount').textContent = data.length;
+      document.getElementById('filteredCount').textContent = filteredData.length;
+    }
+    
+    init();
+  </script>
+</body>
+</html>

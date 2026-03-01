@@ -132,8 +132,8 @@ describe('Task 2.1: AssistantMessage Component', () => {
       
       const cursor = screen.getByTestId('streaming-cursor');
       expect(cursor).toBeDefined();
-      // Verify cursor has blinking animation
-      expect((cursor as HTMLElement).style.animation).toContain('cursor-blink');
+      // Verify cursor has pulsating animation
+      expect((cursor as HTMLElement).style.animation).toContain('cursor-pulse');
     });
 
     it('should remove cursor when streaming completes (Requirement 2.4)', () => {

@@ -83,6 +83,12 @@ export interface Conversation {
   createdAt: Date;
   updatedAt: Date;
   modelId?: string;
+  /**
+   * Active artifact for this conversation
+   * Persists across turns until explicitly cleared or replaced
+   * Validates: Requirement 15.6
+   */
+  activeArtifact?: Artifact | null;
 }
 
 export interface StreamChunk {
@@ -307,3 +313,62 @@ export interface StatsCard {
   color: 'blue' | 'green' | 'red' | 'orange' | 'gray';
   trend?: 'up' | 'down' | 'neutral';
 }
+
+// ============================================
+// Artifacts Panel Types (Requirement 15)
+// ============================================
+
+/**
+ * Artifact types supported in the artifacts panel
+ * Validates: Requirement 15.4
+ */
+export type ArtifactType = 
+  | 'table' 
+  | 'chart' 
+  | 'code' 
+  | 'html' 
+  | 'react_component' 
+  | 'dashboard';
+
+/**
+ * Artifact content union type
+ */
+export type ArtifactContent = 
+  | { type: 'table'; data: Record<string, unknown>[]; columns?: string[] }
+  | { type: 'chart'; chartType: string; data: unknown; config?: Record<string, unknown> }
+  | { type: 'code'; code: string; language: string }
+  | { type: 'html'; html: string }
+  | { type: 'react_component'; component: React.ComponentType; props: Record<string, unknown> }
+  | { type: 'dashboard'; widgets: VisualizationConfig[] };
+
+/**
+ * Artifact displayed in the artifacts panel
+ * Validates: Requirements 15.3, 15.6
+ */
+export interface Artifact {
+  id: string;
+  type: ArtifactType;
+  title: string;
+  content: ArtifactContent;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * User modification to an artifact
+ * Validates: Requirement 15.5
+ */
+export interface ArtifactModification {
+  artifactId: string;
+  modificationType: 'filter' | 'sort' | 'edit' | 'interact';
+  details: Record<string, unknown>;
+  timestamp: Date;
+}
+
+/**
+ * Configurable threshold for routing content to artifacts panel
+ * Validates: Requirement 15.2
+ */
+export const MAX_INLINE_ROWS = 10;

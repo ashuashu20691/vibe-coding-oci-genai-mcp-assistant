@@ -49,7 +49,7 @@ export function InlineAnalysisCard({ analysis, defaultExpanded = false }: Inline
     <div 
       className="mt-3 rounded-2xl overflow-hidden" 
       style={{ 
-        border: '1px solid var(--border-color)', 
+        border: 'none', 
         background: 'var(--bg-secondary)'
       }}
       data-testid="inline-analysis-card"
@@ -61,7 +61,7 @@ export function InlineAnalysisCard({ analysis, defaultExpanded = false }: Inline
         onClick={() => setExpanded(!expanded)}
         style={{ 
           background: 'var(--bg-tertiary, var(--bg-secondary))',
-          borderBottom: expanded ? '1px solid var(--border-color)' : 'none'
+          borderBottom: 'none'
         }}
         role="button"
         aria-expanded={expanded}

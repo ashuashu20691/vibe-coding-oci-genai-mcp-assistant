@@ -11,6 +11,7 @@ export interface DataTableProps {
   title?: string;
   fullscreenEnabled?: boolean;
   exportEnabled?: boolean;
+  onUserModification?: (modificationType: 'filter' | 'sort', details: Record<string, unknown>) => void;
 }
 
 export interface SortState {
@@ -64,7 +65,7 @@ export function filterData(
   });
 }
 
-export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true, exportEnabled = true }: DataTableProps) {
+export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true, exportEnabled = true, onUserModification }: DataTableProps) {
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [filters, setFilters] = useState<FilterState>({});
@@ -101,16 +102,39 @@ export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true
   const handleSort = useCallback((col: string) => {
     if (sortCol === col) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+      // Emit modification event
+      if (onUserModification) {
+        onUserModification('sort', {
+          column: col,
+          direction: sortDir === 'asc' ? 'desc' : 'asc',
+        });
+      }
     } else {
       setSortCol(col);
       setSortDir('asc');
+      // Emit modification event
+      if (onUserModification) {
+        onUserModification('sort', {
+          column: col,
+          direction: 'asc',
+        });
+      }
     }
-  }, [sortCol]);
+  }, [sortCol, sortDir, onUserModification]);
 
   const handleFilterChange = useCallback((col: string, value: string) => {
     setFilters(prev => ({ ...prev, [col]: value }));
     setPage(0); // Reset to first page when filtering
-  }, []);
+    
+    // Emit modification event
+    if (onUserModification) {
+      onUserModification('filter', {
+        column: col,
+        value: value,
+        activeFilters: { ...filters, [col]: value },
+      });
+    }
+  }, [filters, onUserModification]);
 
   const clearFilters = useCallback(() => {
     setFilters({});

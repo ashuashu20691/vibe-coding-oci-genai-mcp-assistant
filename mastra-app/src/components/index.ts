@@ -63,3 +63,7 @@ export { UserMessageBubble } from './UserMessageBubble';
 export type { UserMessageBubbleProps } from './UserMessageBubble';
 export { InlineVisualization } from './InlineVisualization';
 export type { InlineVisualizationProps, VisualizationData } from './InlineVisualization';
+
+// Artifacts Panel
+export { ArtifactsPanel } from './ArtifactsPanel';
+export type { ArtifactsPanelProps } from './ArtifactsPanel';

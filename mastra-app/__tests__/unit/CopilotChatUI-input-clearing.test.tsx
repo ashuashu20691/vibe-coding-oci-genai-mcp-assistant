@@ -64,7 +64,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should clear input field when Enter key is pressed', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Type a message
       fireEvent.change(textarea, { target: { value: 'Test message' } });
@@ -82,7 +82,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should clear input field when send button is clicked', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Type a message
       fireEvent.change(textarea, { target: { value: 'Test message' } });
@@ -104,7 +104,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should reset textarea height to auto after submission', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Simulate multi-line content by setting height
       textarea.style.height = '150px';
@@ -127,7 +127,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should maintain focus on input field after submission', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Focus the textarea
       textarea.focus();
@@ -149,7 +149,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should allow immediate typing after submission', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Type and submit first message
       fireEvent.change(textarea, { target: { value: 'First message' } });
@@ -172,7 +172,7 @@ describe('CopilotChatUI Input Field Clearing', () => {
     it('should clear input, reset height, and maintain focus all together', async () => {
       render(<CopilotChatUI />);
       
-      const textarea = screen.getByPlaceholderText('Reply...') as HTMLTextAreaElement;
+      const textarea = screen.getByPlaceholderText('How can I help you today?') as HTMLTextAreaElement;
       
       // Set up multi-line state
       textarea.style.height = '120px';

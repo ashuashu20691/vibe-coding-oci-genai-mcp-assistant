@@ -5,6 +5,7 @@ import { Conversation, Message } from '@/types';
 
 interface UseConversationOptions {
   dbConnected?: boolean;
+  onArtifactRestore?: (artifact: Artifact | null) => void;
 }
 
 interface UseConversationReturn {
@@ -52,12 +53,21 @@ export function useConversation(options: UseConversationOptions = {}): UseConver
         timestamp: new Date(msg.timestamp),
       }));
 
-      setCurrentConversation({
+      const loadedConversation: Conversation = {
         ...conversation,
         createdAt: new Date(data.createdAt || conversation.createdAt),
         updatedAt: new Date(data.updatedAt || conversation.updatedAt),
-      });
+        activeArtifact: data.activeArtifact || null,
+      };
+
+      setCurrentConversation(loadedConversation);
       setMessages(parsedMessages);
+      
+      // Restore artifact if present
+      // Validates: Requirement 15.6 - Artifact persistence across turns
+      if (options.onArtifactRestore && loadedConversation.activeArtifact) {
+        options.onArtifactRestore(loadedConversation.activeArtifact);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to load conversation';
       setError(errorMessage);
@@ -70,7 +80,7 @@ export function useConversation(options: UseConversationOptions = {}): UseConver
     } finally {
       setIsLoading(false);
     }
-  }, [dbConnected]);
+  }, [dbConnected, options]);
 
   // Create a new conversation
   const createConversation = useCallback(async (title?: string): Promise<Conversation | null> => {

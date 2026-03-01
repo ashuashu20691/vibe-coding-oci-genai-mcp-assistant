@@ -2,14 +2,20 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { Message } from '@/types';
-import { ToolCallDisplay } from './ToolCallDisplay';
 import { AgentThinking, ThinkingStep } from './AgentThinking';
 import { InlineVisualization } from './InlineVisualization';
 import { InlineAnalysisCard } from './InlineAnalysisCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { StreamingCursor } from './AssistantMessage';
+import { ProgressIndicator } from './ProgressIndicator';
+
+interface UIMessage extends Message {
+  progress?: { current: number; total: number };
+  isProgressMessage?: boolean;
+}
 
 interface MessageListProps {
-  messages: Message[];
+  messages: UIMessage[];
   isLoading?: boolean;
   isStreaming?: boolean;
   onSuggestionClick?: (suggestion: string) => void;
@@ -244,13 +250,13 @@ function WelcomeScreen({ onSuggestionClick }: { onSuggestionClick?: (s: string) 
   );
 }
 
-function MessageItem({ message, isLast: _isLast, isStreaming = false }: { message: Message; isLast: boolean; isStreaming?: boolean }) {
+function MessageItem({ message, isLast: _isLast, isStreaming = false }: { message: UIMessage; isLast: boolean; isStreaming?: boolean }) {
   const isUser = message.role === 'user';
 
-  // User messages - clean, minimal style like Claude Desktop
+  // User messages - clean, minimal style like Claude Desktop (Requirement 18.1)
   if (isUser) {
     return (
-      <div className="py-10 border-b" style={{ borderColor: 'var(--border-color)' }}>
+      <div className="py-10" style={{ background: 'transparent' }}>
         <div className="text-[11px] font-bold mb-4 uppercase tracking-wider" style={{ color: 'var(--text-muted)', letterSpacing: '0.1em' }}>
           You
         </div>
@@ -266,20 +272,60 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
     );
   }
 
-  // Assistant messages - clean, minimal style like Claude Desktop
+  // Extract progress information from message content
+  // Progress messages follow format: "Step X of Y: Description..."
+  const progressMatch = message.content.match(/Step (\d+) of (\d+): (.+?)(?:\.\.\.|$)/);
+  const completionMatch = message.content.match(/✓ Completed all (\d+) steps/);
+  
+  let progressInfo: { current: number; total: number; description: string } | null = null;
+  let isCompleted = false;
+
+  if (progressMatch) {
+    progressInfo = {
+      current: parseInt(progressMatch[1], 10),
+      total: parseInt(progressMatch[2], 10),
+      description: progressMatch[3].trim(),
+    };
+  } else if (message.progress) {
+    // Use progress from message metadata if available
+    const descMatch = message.content.match(/Step \d+ of \d+: (.+?)(?:\.\.\.|$)/);
+    progressInfo = {
+      current: message.progress.current,
+      total: message.progress.total,
+      description: descMatch ? descMatch[1].trim() : 'Processing...',
+    };
+  }
+
+  if (completionMatch) {
+    isCompleted = true;
+    const total = parseInt(completionMatch[1], 10);
+    progressInfo = {
+      current: total,
+      total: total,
+      description: 'All steps completed',
+    };
+  }
+
+  // Assistant messages - clean, minimal style like Claude Desktop (Requirement 18.1, 18.6)
   return (
-    <div className="py-10 border-b" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+    <div className="py-10" style={{ background: 'var(--bg-secondary)' }}>
       <div style={{ padding: '0 24px' }}>
         <div className="text-[11px] font-bold mb-4 uppercase tracking-wider" style={{ color: 'var(--text-muted)', letterSpacing: '0.1em' }}>
           Assistant
         </div>
         
-        {/* Tool execution summary - collapsed by default */}
-        {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mb-5"><ToolCallDisplay toolCalls={message.toolCalls} /></div>
+        {/* Progress indicator for multi-step operations */}
+        {progressInfo && (
+          <ProgressIndicator
+            currentStep={progressInfo.current}
+            totalSteps={progressInfo.total}
+            stepDescription={progressInfo.description}
+            isCompleted={isCompleted}
+          />
         )}
         
-        {/* Main content with markdown rendering */}
+        {/* Main content with markdown rendering - tool details integrated into conversational text */}
+        {/* Validates: Requirement 18.3 - Tool details as natural conversational text, not separate event cards */}
         {message.content && (
           <div style={{ 
             fontSize: '16px',
@@ -338,15 +384,3 @@ function TypingIndicator() {
   );
 }
 
-// Streaming cursor - blinking cursor shown at end of streaming text
-function StreamingCursor() {
-  return (
-    <span
-      className="inline-block w-0.5 h-4 ml-0.5 animate-pulse"
-      style={{
-        background: 'var(--accent)',
-        verticalAlign: 'text-bottom'
-      }}
-    />
-  );
-}
