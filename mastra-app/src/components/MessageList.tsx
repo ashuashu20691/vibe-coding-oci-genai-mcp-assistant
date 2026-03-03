@@ -2,12 +2,12 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { Message } from '@/types';
-import { AgentThinking, ThinkingStep } from './AgentThinking';
 import { InlineVisualization } from './InlineVisualization';
 import { InlineAnalysisCard } from './InlineAnalysisCard';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamingCursor } from './AssistantMessage';
 import { ProgressIndicator } from './ProgressIndicator';
+import { ToolExecutionDisplay } from './ToolExecutionDisplay';
 
 interface UIMessage extends Message {
   progress?: { current: number; total: number };
@@ -19,12 +19,11 @@ interface MessageListProps {
   isLoading?: boolean;
   isStreaming?: boolean;
   onSuggestionClick?: (suggestion: string) => void;
-  thinkingSteps?: ThinkingStep[];
   /** Callback when a new message is submitted - used to reset scroll tracking */
   onNewMessageSubmitted?: boolean;
 }
 
-export function MessageList({ messages, isLoading = false, isStreaming = false, onSuggestionClick, thinkingSteps = [] }: MessageListProps) {
+export function MessageList({ messages, isLoading = false, isStreaming = false, onSuggestionClick }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -53,7 +52,7 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
   // Validates: Requirement 2.5 - Auto-scroll to latest content during streaming
   useEffect(() => {
     scrollToBottom();
-  }, [messages, thinkingSteps, scrollToBottom]);
+  }, [messages, scrollToBottom]);
 
   // Reset user scroll state when a new message is submitted (loading starts)
   // Validates: Requirement 2.5 - Reset scroll tracking when new message is submitted
@@ -92,10 +91,10 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
   }, [isStreaming, userScrolled]);
 
   // Find the last assistant message index to show thinking steps before it
-  const lastAssistantIndex = messages.map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? -1;
+  const lastAssistantIndex = messages?.map((m, i) => m?.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? -1;
 
   // Check if the last assistant message is currently streaming (empty or being filled)
-  const lastMessage = messages[messages.length - 1];
+  const lastMessage = messages?.[messages.length - 1];
   const isLastMessageStreaming = isLoading && lastMessage?.role === 'assistant';
 
   return (
@@ -108,18 +107,12 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
       {/* Add top padding for better layout */}
       <div className="pt-8">
         <div className="max-w-4xl mx-auto px-6">
-          {messages.length === 0 && !isLoading && (
+          {(!messages || messages.length === 0) && !isLoading && (
             <WelcomeScreen onSuggestionClick={onSuggestionClick} />
           )}
 
-          {messages.map((message, index) => (
-            <div key={message.id}>
-              {/* Show thinking steps before the last assistant message */}
-              {index === lastAssistantIndex && thinkingSteps.length > 0 && (
-                <div className="mb-4">
-                  <AgentThinking steps={thinkingSteps} isActive={isLoading} />
-                </div>
-              )}
+          {messages?.map((message, index) => (
+            <div key={message?.id || `msg-${index}`}>
               <MessageItem
                 message={message}
                 isLast={index === messages.length - 1}
@@ -128,15 +121,8 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
             </div>
           ))}
 
-          {/* Show thinking steps at the end if loading and no assistant message yet */}
-          {isLoading && thinkingSteps.length > 0 && lastAssistantIndex === -1 && (
-            <div className="mb-4">
-              <AgentThinking steps={thinkingSteps} isActive={true} />
-            </div>
-          )}
-
           {/* Show typing indicator when waiting for first chunk */}
-          {isLoading && messages.length > 0 && messages[messages.length - 1]?.role === 'user' && thinkingSteps.length === 0 && (
+          {isLoading && messages?.length > 0 && messages[messages.length - 1]?.role === 'user' && (
             <div className="py-4">
               <TypingIndicator />
             </div>
@@ -251,22 +237,14 @@ function WelcomeScreen({ onSuggestionClick }: { onSuggestionClick?: (s: string) 
 }
 
 function MessageItem({ message, isLast: _isLast, isStreaming = false }: { message: UIMessage; isLast: boolean; isStreaming?: boolean }) {
-  const isUser = message.role === 'user';
+  const isUser = message?.role === 'user';
 
-  // User messages - clean, minimal style like Claude Desktop (Requirement 18.1)
+  // User messages - Claude Desktop style with right alignment (Requirement 12.1, 12.4)
   if (isUser) {
     return (
-      <div className="py-10" style={{ background: 'transparent' }}>
-        <div className="text-[11px] font-bold mb-4 uppercase tracking-wider" style={{ color: 'var(--text-muted)', letterSpacing: '0.1em' }}>
-          You
-        </div>
-        <div style={{ 
-          fontSize: '16px',
-          lineHeight: '1.7',
-          color: 'var(--text-primary)',
-          fontWeight: '400'
-        }}>
-          <MarkdownRenderer content={message.content} />
+      <div className="py-3" style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+        <div className="message message-user">
+          <MarkdownRenderer content={message?.content || ''} />
         </div>
       </div>
     );
@@ -274,8 +252,8 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
 
   // Extract progress information from message content
   // Progress messages follow format: "Step X of Y: Description..."
-  const progressMatch = message.content.match(/Step (\d+) of (\d+): (.+?)(?:\.\.\.|$)/);
-  const completionMatch = message.content.match(/✓ Completed all (\d+) steps/);
+  const progressMatch = message?.content?.match(/Step (\d+) of (\d+): (.+?)(?:\.\.\.|$)/);
+  const completionMatch = message?.content?.match(/✓ Completed all (\d+) steps/);
   
   let progressInfo: { current: number; total: number; description: string } | null = null;
   let isCompleted = false;
@@ -286,9 +264,9 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
       total: parseInt(progressMatch[2], 10),
       description: progressMatch[3].trim(),
     };
-  } else if (message.progress) {
+  } else if (message?.progress) {
     // Use progress from message metadata if available
-    const descMatch = message.content.match(/Step \d+ of \d+: (.+?)(?:\.\.\.|$)/);
+    const descMatch = message.content?.match(/Step \d+ of \d+: (.+?)(?:\.\.\.|$)/);
     progressInfo = {
       current: message.progress.current,
       total: message.progress.total,
@@ -306,14 +284,110 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
     };
   }
 
-  // Assistant messages - clean, minimal style like Claude Desktop (Requirement 18.1, 18.6)
-  return (
-    <div className="py-10" style={{ background: 'var(--bg-secondary)' }}>
-      <div style={{ padding: '0 24px' }}>
-        <div className="text-[11px] font-bold mb-4 uppercase tracking-wider" style={{ color: 'var(--text-muted)', letterSpacing: '0.1em' }}>
-          Assistant
+  // Assistant messages - Claude Desktop style with left alignment (Requirement 12.1, 12.4)
+  // Parse content to interleave tool calls with their narratives
+  const renderContentWithTools = () => {
+    if (!message?.content) return null;
+
+    // If no tool calls, just render content normally
+    if (!message?.toolCalls || message.toolCalls.length === 0) {
+      return (
+        <div>
+          {isStreaming ? (
+            <div>
+              <MarkdownRenderer content={message.content} />
+              <StreamingCursor />
+            </div>
+          ) : (
+            <MarkdownRenderer content={message.content} />
+          )}
         </div>
+      );
+    }
+
+    // Split content by tool-related phrases to interleave tools
+    const content = message.content;
+    const toolCalls = message.toolCalls;
+    
+    // Filter out tool status text that might be embedded in content
+    // Pattern: ToolNameCompleted, ToolNameFailed, etc.
+    let filteredContent = content;
+    toolCalls.forEach(tool => {
+      if (tool?.name) {
+        // Remove patterns like "ConnectCompleted", "ExecuteQueryCompleted", etc.
+        const toolNameBase = tool.name.replace(/^(sqlcl_|mcp_)/, '').replace(/[-_]/g, '');
+        const statusPattern = new RegExp(`${toolNameBase}(Completed|Failed|Executing|Pending)`, 'gi');
+        filteredContent = filteredContent.replace(statusPattern, '');
         
+        // Also remove standalone "Completed", "Failed" etc. that might follow tool names
+        filteredContent = filteredContent.replace(/\s*(Completed|Failed|Executing|Pending)\s*/g, ' ');
+      }
+    });
+    
+    // Clean up extra whitespace
+    filteredContent = filteredContent.replace(/\n\n\n+/g, '\n\n').trim();
+    
+    const segments: Array<{ type: 'tool' | 'text'; content: string | typeof toolCalls[0] }> = [];
+    
+    // Simple approach: Show each tool followed by its related content section
+    // Split content into paragraphs
+    const paragraphs = filteredContent.split('\n\n');
+    let toolIndex = 0;
+    
+    for (let i = 0; i < paragraphs.length; i++) {
+      const para = paragraphs[i];
+      
+      // Skip empty paragraphs
+      if (!para.trim()) continue;
+      
+      // Check if this paragraph mentions checking/retrieving/running something
+      // which typically follows a tool execution
+      const isToolNarrative = /^(Let me check|I retrieved|I'm|I'll|I ran|I executed|I connected)/i.test(para.trim());
+      
+      // If we have a tool to show and this looks like a tool narrative, show the tool first
+      if (isToolNarrative && toolIndex < toolCalls.length) {
+        segments.push({ type: 'tool', content: toolCalls[toolIndex] });
+        toolIndex++;
+      }
+      
+      segments.push({ type: 'text', content: para });
+    }
+    
+    // Add any remaining tools at the end
+    while (toolIndex < toolCalls.length) {
+      segments.push({ type: 'tool', content: toolCalls[toolIndex] });
+      toolIndex++;
+    }
+
+    return (
+      <div>
+        {segments.map((segment, idx) => {
+          if (segment.type === 'tool') {
+            const toolCall = segment.content as typeof toolCalls[0];
+            return (
+              <div key={`tool-${idx}`} style={{ marginBottom: '12px' }}>
+                <ToolExecutionDisplay
+                  toolCall={toolCall}
+                  status="completed"
+                />
+              </div>
+            );
+          } else {
+            return (
+              <div key={`text-${idx}`} style={{ marginBottom: idx < segments.length - 1 ? '12px' : '0' }}>
+                <MarkdownRenderer content={segment.content as string} />
+              </div>
+            );
+          }
+        })}
+        {isStreaming && <StreamingCursor />}
+      </div>
+    );
+  };
+  
+  return (
+    <div className="py-3" style={{ display: 'flex', justifyContent: 'flex-start', width: '100%' }}>
+      <div className="message message-assistant">
         {/* Progress indicator for multi-step operations */}
         {progressInfo && (
           <ProgressIndicator
@@ -324,33 +398,16 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
           />
         )}
         
-        {/* Main content with markdown rendering - tool details integrated into conversational text */}
-        {/* Validates: Requirement 18.3 - Tool details as natural conversational text, not separate event cards */}
-        {message.content && (
-          <div style={{ 
-            fontSize: '16px',
-            lineHeight: '1.7',
-            color: 'var(--text-primary)',
-            fontWeight: '400'
-          }}>
-            {isStreaming ? (
-              <div>
-                <MarkdownRenderer content={message.content} />
-                <StreamingCursor />
-              </div>
-            ) : (
-              <MarkdownRenderer content={message.content} />
-            )}
-          </div>
-        )}
+        {/* Render content with interleaved tool execution displays */}
+        {renderContentWithTools()}
         
         {/* Inline visualizations and analysis cards */}
-        {message.analysis && (
+        {message?.analysis && (
           <div className="mt-8">
             <InlineAnalysisCard analysis={message.analysis} defaultExpanded={false} />
           </div>
         )}
-        {message.visualization?.html && (
+        {message?.visualization?.html && (
           <div className="mt-8">
             <InlineVisualization visualization={message.visualization} />
           </div>

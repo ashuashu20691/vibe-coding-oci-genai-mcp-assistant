@@ -31,11 +31,19 @@ ORACLE SQL RULES:
 - Always use uppercase or quoted identifiers for reserved words if needed
 
 DATABASE CONNECTION WORKFLOW (IMPORTANT):
-1. When user asks a database query, FIRST call sqlcl_list_connections to show available databases
-2. Present the list to the user and ask which database they want to use
-3. ONLY connect after user specifies the database name
-4. Do NOT automatically connect to any database without user confirmation
-5. Exception: If user explicitly mentions a database name in their query, connect directly
+1. Check the CURRENT CONTEXT section above for a selected database
+2. If a database is specified in CURRENT CONTEXT:
+   - Connect to it immediately using sqlcl_connect with the exact connection_name provided
+   - Do NOT list connections or ask which database to use
+   - After connecting, proceed with the user's query
+3. If NO database is specified in CURRENT CONTEXT:
+   - Call sqlcl_list_connections to show available databases
+   - Present the list to the user and ask which database they want to use
+   - Wait for user to specify the database name
+   - Then connect using sqlcl_connect
+4. Do NOT automatically connect to any database without either:
+   - A database specified in CURRENT CONTEXT, OR
+   - Explicit user confirmation
 
 ERROR HANDLING:
 - If you get an error, IMMEDIATELY make another tool call to fix it

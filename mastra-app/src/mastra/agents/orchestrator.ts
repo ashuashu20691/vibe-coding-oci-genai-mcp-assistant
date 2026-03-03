@@ -9,6 +9,7 @@ import { analyzeData, type AnalysisResult } from './data-analysis-agent';
 import { generateVisualization, type VisualizationResult } from './visualization-agent';
 import { AnalysisAgent, AnalysisRequest, AnalysisResponse } from './analysis-agent';
 import { IterationStateMachine, type RetryOptions } from '../../services/iteration-state-machine';
+import { RetryOrchestrator, type RetryStrategy } from '../../services/retry-orchestrator';
 
 export interface ToolExecutionResult {
   success: boolean;
@@ -28,12 +29,15 @@ export class DatabaseOrchestrator {
   private conversationId: string;
   private modelId: string;
   private iterationMachine: IterationStateMachine;
+  private retryOrchestrator: RetryOrchestrator;
   private onIterationUpdate?: (iteration: number, maxIterations: number) => void;
+  private onNarrative?: (narrative: string) => void;
 
   constructor(conversationId: string, modelId: string) {
     this.conversationId = conversationId;
     this.modelId = modelId;
     this.iterationMachine = new IterationStateMachine();
+    this.retryOrchestrator = new RetryOrchestrator();
   }
 
   /**
@@ -41,6 +45,13 @@ export class DatabaseOrchestrator {
    */
   setIterationUpdateCallback(callback: (iteration: number, maxIterations: number) => void): void {
     this.onIterationUpdate = callback;
+  }
+
+  /**
+   * Set callback for narrative updates during retry operations
+   */
+  setNarrativeCallback(callback: (narrative: string) => void): void {
+    this.onNarrative = callback;
   }
 
   /**
@@ -56,8 +67,9 @@ export class DatabaseOrchestrator {
    * For SQL operations, ensures a connection exists first, then analyzes results
    * and generates appropriate visualizations.
    * 
-   * Uses IterationStateMachine for autonomous retry logic (max 5 attempts).
-   * Validates: Requirements 14.1, 14.2, 14.3
+   * Uses RetryOrchestrator for autonomous retry logic (max 5 attempts) with
+   * intelligent error recovery strategies including schema refresh.
+   * Validates: Requirements 1.5, 1.6, 11.1, 11.4
    */
   async executeTool(
     toolName: string,
@@ -92,70 +104,96 @@ export class DatabaseOrchestrator {
       }
     }
 
-    // Execute the tool with retry logic
-    const retryOptions: RetryOptions = {
-      maxAttempts: 5,
-      onIterationUpdate: this.onIterationUpdate,
-      onFailure: (error: Error, attemptNum: number) => {
-        // Generate alternative strategy based on error
-        console.log(`[Orchestrator] Attempt ${attemptNum} failed: ${error.message}`);
-        
-        // For connection errors, try reconnecting
-        if (error.message.includes('connection') || error.message.includes('not connected')) {
-          return {
-            description: 'Reconnecting to database',
-            operation: async () => {
-              await this.autoConnect(mcpTools);
-              return this.executeToolDirect(normalizedName, args, mcpTools);
-            },
-          };
-        }
-        
-        // For SQL errors, try with different parameter mapping
-        if (error.message.includes('parameter') || error.message.includes('argument')) {
-          return {
-            description: 'Retrying with alternative parameter mapping',
-            operation: () => this.executeToolDirect(normalizedName, args, mcpTools),
-          };
-        }
-        
-        // Default: retry the same operation
-        return {
-          description: 'Retrying operation',
-          operation: () => this.executeToolDirect(normalizedName, args, mcpTools),
-        };
+    // Create custom retry strategies for schema-related errors
+    // Validates: Requirements 1.6, 11.1, 11.2
+    const schemaRefreshStrategy: RetryStrategy = {
+      name: 'schema_refresh',
+      description: "That didn't work, let me check the schema first",
+      shouldApply: (error: Error) => {
+        const msg = error.message.toLowerCase();
+        return msg.includes('table not found') || 
+               msg.includes('table does not exist') ||
+               msg.includes('column not found') ||
+               msg.includes('column does not exist') ||
+               msg.includes('invalid table') ||
+               msg.includes('invalid column') ||
+               msg.includes('no such table') ||
+               msg.includes('no such column');
       },
-      shouldRetry: (error: Error) => {
-        // Don't retry authentication errors
-        if (error.message.includes('authentication') || error.message.includes('unauthorized')) {
-          return false;
+      execute: async (operation, context) => {
+        // Refresh schema cache by querying schema information
+        // This helps when table/column names have changed or cache is stale
+        try {
+          console.log('[Orchestrator] Refreshing schema cache due to table/column not found error');
+          await this.executeToolDirect('schema-information', {}, mcpTools);
+        } catch (schemaError) {
+          console.log('[Orchestrator] Schema refresh failed, continuing with retry:', schemaError);
         }
-        return true;
+        // Retry the original operation with refreshed schema
+        return operation();
       },
     };
 
-    const iterationResult = await this.iterationMachine.executeWithRetry(
+    // Create strategy for re-describing specific tables when column errors occur
+    const tableDescribeStrategy: RetryStrategy = {
+      name: 'table_describe',
+      description: "Let me re-check that table's structure",
+      shouldApply: (error: Error) => {
+        const msg = error.message.toLowerCase();
+        // Only apply if we have a specific table name in the error
+        return (msg.includes('column not found') || msg.includes('column does not exist')) &&
+               (msg.includes('in table') || msg.includes('from'));
+      },
+      execute: async (operation, context) => {
+        // Try to extract table name from error and describe it
+        try {
+          const errorMsg = context.previousError?.message || '';
+          // Simple extraction - look for table name patterns
+          const tableMatch = errorMsg.match(/table\s+(\w+)/i) || errorMsg.match(/from\s+(\w+)/i);
+          if (tableMatch && tableMatch[1]) {
+            const tableName = tableMatch[1];
+            console.log(`[Orchestrator] Re-describing table ${tableName} due to column error`);
+            await this.executeToolDirect('schema-information', { table: tableName }, mcpTools);
+          }
+        } catch (describeError) {
+          console.log('[Orchestrator] Table describe failed, continuing with retry:', describeError);
+        }
+        return operation();
+      },
+    };
+
+    // Execute with retry orchestrator
+    const retryResult = await this.retryOrchestrator.executeWithRetry(
       () => this.executeToolDirect(normalizedName, args, mcpTools),
-      retryOptions
+      {
+        maxAttempts: 5,
+        operationName: normalizedName,
+        onNarrative: this.onNarrative,
+        onRetry: (attemptNum, strategy) => {
+          // Call iteration update callback for all attempts
+          if (this.onIterationUpdate) {
+            this.onIterationUpdate(attemptNum, 5);
+          }
+        },
+        customStrategies: [schemaRefreshStrategy, tableDescribeStrategy],
+      }
     );
 
-    // Convert iteration result to tool execution result
-    if (!iterationResult.success) {
+    // Convert retry result to tool execution result
+    if (!retryResult.success) {
       return {
         success: false,
-        error: iterationResult.errors.length > 0 
-          ? iterationResult.errors[iterationResult.errors.length - 1].message
-          : 'Tool execution failed after maximum retry attempts',
-        iterationCount: iterationResult.attempts,
-        attemptSummaries: iterationResult.attemptSummaries,
+        error: retryResult.error?.message || 'Tool execution failed after maximum retry attempts',
+        iterationCount: retryResult.attemptCount,
+        attemptSummaries: retryResult.narratives,
       };
     }
 
     const result: ToolExecutionResult = {
       success: true,
-      result: iterationResult.data,
-      iterationCount: iterationResult.attempts,
-      attemptSummaries: iterationResult.attemptSummaries,
+      result: retryResult.data,
+      iterationCount: retryResult.attemptCount,
+      attemptSummaries: retryResult.narratives,
     };
 
     // If this was a successful SQL query, analyze and visualize the results

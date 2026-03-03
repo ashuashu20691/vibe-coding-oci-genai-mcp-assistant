@@ -1,6 +1,7 @@
 // src/services/export-service.ts
 
 import { DashboardLayout, DashboardSection } from '@/types';
+import ExcelJS from 'exceljs';
 
 /**
  * Result of an export operation.
@@ -23,6 +24,86 @@ export interface PNGExportOptions {
   scale?: number;
   /** Padding around the element in pixels (default: 10) */
   padding?: number;
+}
+
+/**
+ * Options for Excel export.
+ */
+export interface ExcelExportOptions {
+  /** Workbook title */
+  title?: string;
+  /** Sheet name (default: 'Data') */
+  sheetName?: string;
+  /** Whether to apply header formatting (default: true) */
+  formatHeaders?: boolean;
+  /** Whether to auto-size columns (default: true) */
+  autoSizeColumns?: boolean;
+  /** Whether to apply conditional formatting for grades (default: true) */
+  applyConditionalFormatting?: boolean;
+}
+
+/**
+ * Data for Excel export with multi-modal content.
+ */
+export interface ExcelExportData {
+  /** Sheet name */
+  sheetName: string;
+  /** Column headers */
+  headers: string[];
+  /** Data rows */
+  rows: unknown[][];
+  /** Images to embed (optional) */
+  images?: ExcelImageData[];
+  /** Charts to embed (optional) */
+  charts?: ExcelChartData[];
+  /** Conditional formatting rules (optional) */
+  conditionalFormatting?: ConditionalFormattingRule[];
+}
+
+/**
+ * Image data for Excel embedding.
+ */
+export interface ExcelImageData {
+  /** Image buffer or base64 string */
+  imageData: Buffer | string;
+  /** Row index (0-based) */
+  row: number;
+  /** Column index (0-based) */
+  column: number;
+  /** Image width in pixels (optional) */
+  width?: number;
+  /** Image height in pixels (optional) */
+  height?: number;
+  /** Image extension (png, jpeg, etc.) */
+  extension?: 'png' | 'jpeg' | 'jpg' | 'gif';
+}
+
+/**
+ * Chart data for Excel embedding.
+ */
+export interface ExcelChartData {
+  /** Chart type */
+  type: 'bar' | 'line' | 'pie' | 'scatter';
+  /** Chart title */
+  title: string;
+  /** Data range for the chart */
+  dataRange: string;
+  /** Position to place the chart */
+  position: { row: number; column: number };
+}
+
+/**
+ * Conditional formatting rule for Excel.
+ */
+export interface ConditionalFormattingRule {
+  /** Column index to apply formatting */
+  column: number;
+  /** Formatting type */
+  type: 'grade' | 'threshold' | 'dataBar';
+  /** Grade mapping (A=Green, B=Green, C=Yellow, D=Red, F=Red) */
+  gradeColors?: Record<string, string>;
+  /** Threshold values for numeric formatting */
+  thresholds?: { value: number; color: string }[];
 }
 
 /**
@@ -52,6 +133,29 @@ export class ExportService {
     const service = new ExportService();
     const htmlContent = service.generateStandaloneHtml(dashboard, data);
     ExportService.triggerDownload(htmlContent, filename, 'text/html;charset=utf-8;');
+  }
+
+  /**
+   * Static method to export data to Excel with multi-modal content and trigger download.
+   * Supports image embedding, chart embedding, header formatting, and conditional formatting.
+   * Implements Requirements 10.1, 10.2, 10.3, 10.4, 10.5.
+   * 
+   * @param exportData - The data to export including sheets, images, charts, and formatting
+   * @param filename - The name of the file to download (should include .xlsx extension)
+   * @param options - Optional configuration for Excel export
+   */
+  static async exportToExcel(
+    exportData: ExcelExportData | ExcelExportData[],
+    filename: string,
+    options: ExcelExportOptions = {}
+  ): Promise<void> {
+    const service = new ExportService();
+    const buffer = await service.generateExcelWorkbook(exportData, options);
+    const uint8Array = new Uint8Array(buffer);
+    ExportService.triggerBlobDownload(
+      new Blob([uint8Array], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      filename
+    );
   }
 
   /**
@@ -827,5 +931,312 @@ export class ExportService {
         });
       }
     `;
+  }
+
+  /**
+   * Generates an Excel workbook with multi-modal content.
+   * Implements Requirements 10.1, 10.2, 10.3, 10.4, 10.5.
+   * 
+   * @param exportData - Single sheet or array of sheets to export
+   * @param options - Export options
+   * @returns Promise<Buffer> containing the Excel file
+   */
+  private async generateExcelWorkbook(
+    exportData: ExcelExportData | ExcelExportData[],
+    options: ExcelExportOptions = {}
+  ): Promise<Buffer> {
+    const {
+      title = 'Data Export',
+      formatHeaders = true,
+      autoSizeColumns = true,
+      applyConditionalFormatting = true,
+    } = options;
+
+    // Create workbook
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Mastra Analysis System';
+    workbook.created = new Date();
+    workbook.modified = new Date();
+
+    // Handle single sheet or multiple sheets
+    const sheets = Array.isArray(exportData) ? exportData : [exportData];
+
+    for (const sheetData of sheets) {
+      await this.addSheetToWorkbook(workbook, sheetData, {
+        formatHeaders,
+        autoSizeColumns,
+        applyConditionalFormatting,
+      });
+    }
+
+    // Generate buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+
+  /**
+   * Adds a sheet to the workbook with data, images, charts, and formatting.
+   * Implements Requirements 10.1, 10.2, 10.3, 10.4, 10.5.
+   */
+  private async addSheetToWorkbook(
+    workbook: ExcelJS.Workbook,
+    sheetData: ExcelExportData,
+    options: { formatHeaders: boolean; autoSizeColumns: boolean; applyConditionalFormatting: boolean }
+  ): Promise<void> {
+    const { sheetName, headers, rows, images, charts, conditionalFormatting } = sheetData;
+    const { formatHeaders, autoSizeColumns, applyConditionalFormatting } = options;
+
+    // Create worksheet
+    const worksheet = workbook.addWorksheet(sheetName);
+
+    // Add headers
+    if (headers && headers.length > 0) {
+      worksheet.addRow(headers);
+
+      // Format headers (Requirement 10.2)
+      if (formatHeaders) {
+        const headerRow = worksheet.getRow(1);
+        headerRow.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+        headerRow.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FF4472C4' },
+        };
+        headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+        headerRow.height = 20;
+      }
+    }
+
+    // Add data rows
+    if (rows && rows.length > 0) {
+      rows.forEach(row => {
+        worksheet.addRow(row);
+      });
+    }
+
+    // Auto-size columns (Requirement 10.2)
+    if (autoSizeColumns && worksheet.columns) {
+      worksheet.columns.forEach((column, index) => {
+        let maxLength = headers[index]?.toString().length || 10;
+        
+        // Check data rows for max length
+        rows.forEach(row => {
+          const cellValue = row[index];
+          if (cellValue !== null && cellValue !== undefined) {
+            const cellLength = cellValue.toString().length;
+            if (cellLength > maxLength) {
+              maxLength = cellLength;
+            }
+          }
+        });
+
+        // Set column width (max 50 characters)
+        column.width = Math.min(maxLength + 2, 50);
+      });
+    }
+
+    // Apply conditional formatting (Requirement 10.4, 10.5)
+    if (applyConditionalFormatting && conditionalFormatting) {
+      for (const rule of conditionalFormatting) {
+        this.applyConditionalFormattingToColumn(worksheet, rule, rows.length);
+      }
+    }
+
+    // Embed images (Requirement 10.1)
+    if (images && images.length > 0) {
+      for (const imageData of images) {
+        await this.embedImageInWorksheet(workbook, worksheet, imageData);
+      }
+    }
+
+    // Embed charts (Requirement 10.3)
+    if (charts && charts.length > 0) {
+      for (const chartData of charts) {
+        this.embedChartInWorksheet(worksheet, chartData);
+      }
+    }
+
+    // Freeze header row
+    if (headers && headers.length > 0) {
+      worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+    }
+  }
+
+  /**
+   * Embeds an image in the worksheet.
+   * Implements Requirement 10.1.
+   */
+  private async embedImageInWorksheet(
+    workbook: ExcelJS.Workbook,
+    worksheet: ExcelJS.Worksheet,
+    imageData: ExcelImageData
+  ): Promise<void> {
+    try {
+      let imageBuffer: Buffer | Uint8Array;
+
+      // Convert image data to buffer
+      if (Buffer.isBuffer(imageData.imageData)) {
+        imageBuffer = imageData.imageData;
+      } else if (typeof imageData.imageData === 'string') {
+        // Handle base64 string
+        const base64Data = imageData.imageData.replace(/^data:image\/\w+;base64,/, '');
+        imageBuffer = Buffer.from(base64Data, 'base64');
+      } else {
+        console.warn('Invalid image data format');
+        return;
+      }
+
+      // Add image to workbook
+      const imageId = workbook.addImage({
+        buffer: imageBuffer as any,
+        extension: (imageData.extension === 'jpg' ? 'jpeg' : imageData.extension) || 'png',
+      });
+
+      // Calculate position (Excel uses 0-based indexing)
+      const row = imageData.row + 1; // +1 for header row
+      const column = imageData.column;
+
+      // Add image to worksheet
+      worksheet.addImage(imageId, {
+        tl: { col: column, row: row },
+        ext: {
+          width: imageData.width || 100,
+          height: imageData.height || 100,
+        },
+      });
+
+      // Adjust row height to accommodate image
+      const targetRow = worksheet.getRow(row + 1);
+      const imageHeight = imageData.height || 100;
+      const rowHeight = (imageHeight * 0.75) + 5; // Convert pixels to points (approx)
+      if (targetRow.height < rowHeight) {
+        targetRow.height = rowHeight;
+      }
+    } catch (error) {
+      console.error('Failed to embed image in Excel:', error);
+    }
+  }
+
+  /**
+   * Embeds a chart in the worksheet.
+   * Implements Requirement 10.3.
+   * 
+   * Note: ExcelJS has limited chart support. This is a placeholder for basic chart embedding.
+   * For full chart support, consider using additional libraries or pre-rendered chart images.
+   */
+  private embedChartInWorksheet(
+    worksheet: ExcelJS.Worksheet,
+    chartData: ExcelChartData
+  ): void {
+    // ExcelJS doesn't have full native chart support yet
+    // As a workaround, we add a note indicating where a chart should be
+    const { position, title, type } = chartData;
+    
+    const cell = worksheet.getCell(position.row + 1, position.column + 1);
+    cell.value = `[Chart: ${title} (${type})]`;
+    cell.font = { italic: true, color: { argb: 'FF0066CC' } };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE7F3FF' },
+    };
+    
+    // Note: For production use, consider:
+    // 1. Pre-rendering charts as images and embedding them
+    // 2. Using a library that supports Excel chart generation
+    // 3. Providing chart data in a separate sheet for manual chart creation
+  }
+
+  /**
+   * Applies conditional formatting to a column.
+   * Implements Requirements 10.4, 10.5.
+   */
+  private applyConditionalFormattingToColumn(
+    worksheet: ExcelJS.Worksheet,
+    rule: ConditionalFormattingRule,
+    rowCount: number
+  ): void {
+    const { column, type, gradeColors, thresholds } = rule;
+    const columnLetter = this.getColumnLetter(column);
+    
+    if (type === 'grade' && gradeColors) {
+      // Apply grade-based color coding (A/B=Green, C=Yellow, D/F=Red)
+      // Requirement 10.4, 10.5
+      const defaultGradeColors: Record<string, string> = {
+        'A': '92D050', // Green
+        'B': '92D050', // Green
+        'C': 'FFFF00', // Yellow
+        'D': 'FF0000', // Red
+        'F': 'FF0000', // Red
+      };
+      
+      const colors: Record<string, string> = { ...defaultGradeColors, ...gradeColors };
+      
+      // Apply formatting to each cell in the column
+      for (let row = 2; row <= rowCount + 1; row++) {
+        const cell = worksheet.getCell(`${columnLetter}${row}`);
+        const cellValue = cell.value?.toString().trim().toUpperCase();
+        
+        if (cellValue && colors[cellValue]) {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: `FF${colors[cellValue]}` },
+          };
+          cell.font = { bold: true };
+        }
+      }
+    } else if (type === 'threshold' && thresholds) {
+      // Apply threshold-based color coding
+      for (let row = 2; row <= rowCount + 1; row++) {
+        const cell = worksheet.getCell(`${columnLetter}${row}`);
+        const cellValue = parseFloat(cell.value?.toString() || '0');
+        
+        if (!isNaN(cellValue)) {
+          // Find matching threshold
+          const matchingThreshold = thresholds
+            .sort((a, b) => b.value - a.value)
+            .find(t => cellValue >= t.value);
+          
+          if (matchingThreshold) {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: `FF${matchingThreshold.color}` },
+            };
+          }
+        }
+      }
+    } else if (type === 'dataBar') {
+      // Apply data bar conditional formatting
+      worksheet.addConditionalFormatting({
+        ref: `${columnLetter}2:${columnLetter}${rowCount + 1}`,
+        rules: [
+          {
+            type: 'dataBar',
+            minLength: 0,
+            maxLength: 100,
+            gradient: false,
+            border: true,
+            negativeBarColorSameAsPositive: false,
+          } as any, // ExcelJS types may not be complete
+        ],
+      });
+    }
+  }
+
+  /**
+   * Converts a column index to Excel column letter (0 -> A, 1 -> B, etc.)
+   */
+  private getColumnLetter(columnIndex: number): string {
+    let letter = '';
+    let index = columnIndex;
+    
+    while (index >= 0) {
+      letter = String.fromCharCode((index % 26) + 65) + letter;
+      index = Math.floor(index / 26) - 1;
+    }
+    
+    return letter;
   }
 }

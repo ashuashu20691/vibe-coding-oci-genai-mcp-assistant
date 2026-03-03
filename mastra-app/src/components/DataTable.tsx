@@ -72,7 +72,13 @@ export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true
   const [page, setPage] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const columns = useMemo(() => data.length > 0 ? Object.keys(data[0]) : [], [data]);
+  const columns = useMemo(() => {
+    // Add null checks before accessing rows/columns
+    if (!data || !Array.isArray(data) || data.length === 0) return [];
+    const firstRow = data[0];
+    if (!firstRow || typeof firstRow !== 'object') return [];
+    return Object.keys(firstRow);
+  }, [data]);
 
   // Apply filters first, then sort
   const filtered = useMemo(() => filterData(data, filters), [data, filters]);
@@ -82,7 +88,7 @@ export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true
 
   // Export handler for CSV export
   const handleExport = useCallback(async (format: ExportFormat) => {
-    if (format === 'csv' && data.length > 0) {
+    if (format === 'csv' && data && Array.isArray(data) && data.length > 0) {
       const filename = `${title || 'data'}-${new Date().toISOString().split('T')[0]}.csv`;
       // Export the filtered/sorted data, not just the current page
       ExportService.exportToCSV(sorted, filename);
@@ -150,7 +156,7 @@ export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true
     return String(v);
   };
 
-  if (data.length === 0) return <div className="p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No data</div>;
+  if (!data || !Array.isArray(data) || data.length === 0) return <div className="p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No data</div>;
 
   const tableContent = (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>

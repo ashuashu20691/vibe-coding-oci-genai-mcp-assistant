@@ -10,7 +10,7 @@ interface ToolCallDisplayProps {
 export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
   const [expanded, setExpanded] = useState(false);
   
-  if (toolCalls.length === 0) return null;
+  if (!toolCalls || toolCalls.length === 0) return null;
   
   return (
     <div className="mb-3">
@@ -36,8 +36,8 @@ export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
       
       {expanded && (
         <div className="mt-2 space-y-2">
-          {toolCalls.map((tc) => (
-            <ToolCallItem key={tc.id} toolCall={tc} />
+          {toolCalls?.map((tc) => (
+            <ToolCallItem key={tc?.id || Math.random()} toolCall={tc} />
           ))}
         </div>
       )}
@@ -48,7 +48,10 @@ export function ToolCallDisplay({ toolCalls }: ToolCallDisplayProps) {
 function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
   
-  const displayName = toolCall.name
+  // Handle missing or partial tool data gracefully
+  if (!toolCall) return null;
+  
+  const displayName = (toolCall?.name || 'Unknown Tool')
     .replace(/^sqlcl_/, '')
     .replace(/[-_]/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
@@ -71,7 +74,7 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
         <span className="font-medium">{displayName}</span>
       </button>
       
-      {expanded && (
+      {expanded && toolCall?.arguments && (
         <div 
           className="mt-1 ml-5 p-3 rounded-lg text-xs font-mono overflow-x-auto" 
           style={{ background: 'var(--bg-secondary)', border: 'none' }}

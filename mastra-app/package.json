@@ -17,6 +17,7 @@
     "@mastra/core": "^1.2.0",
     "@mastra/mcp": "^1.0.0",
     "@types/leaflet": "^1.9.21",
+    "exceljs": "^4.4.0",
     "highlight.js": "^11.11.1",
     "leaflet": "^1.9.4",
     "mermaid": "^11.12.2",

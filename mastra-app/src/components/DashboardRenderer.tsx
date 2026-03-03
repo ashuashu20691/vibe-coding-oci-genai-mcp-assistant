@@ -44,10 +44,22 @@ interface DashboardRendererProps {
 }
 
 export function DashboardRenderer({ config }: DashboardRendererProps) {
+    // Add validation before processing widgets
+    if (!config || typeof config !== 'object') {
+        return (
+            <div className="p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                Invalid dashboard configuration
+            </div>
+        );
+    }
+    
     const { title, stats = [], alerts = [], charts = [], tables = [] } = config;
 
     // Render stats cards
     const renderStat = (stat: DashboardStat, index: number) => {
+        // Validate stat object
+        if (!stat || typeof stat !== 'object') return null;
+        
         const colors = {
             red: 'bg-red-50 text-red-700 border-red-200',
             green: 'bg-green-50 text-green-700 border-green-200',
@@ -59,9 +71,9 @@ export function DashboardRenderer({ config }: DashboardRendererProps) {
 
         return (
             <div key={index} className={`p-4 rounded-lg border ${colorClass} flex flex-col items-center justify-center min-w-[150px]`}>
-                <div className="text-3xl font-bold mb-1">{stat.value}</div>
-                <div className="text-sm opacity-80 uppercase tracking-wide">{stat.label}</div>
-                {stat.change && <div className="text-xs mt-2 font-medium">{stat.change}</div>}
+                <div className="text-3xl font-bold mb-1">{stat?.value ?? '—'}</div>
+                <div className="text-sm opacity-80 uppercase tracking-wide">{stat?.label ?? 'Unknown'}</div>
+                {stat?.change && <div className="text-xs mt-2 font-medium">{stat.change}</div>}
             </div>
         );
     };
@@ -75,58 +87,67 @@ export function DashboardRenderer({ config }: DashboardRendererProps) {
             </div>
 
             {/* Alerts Banner */}
-            {alerts.length > 0 && (
+            {alerts && Array.isArray(alerts) && alerts.length > 0 && (
                 <div className="dashboard-alerts space-y-2">
-                    {alerts.map((alert, idx) => (
-                        <div
-                            key={idx}
-                            className={`p-3 rounded-md flex items-center gap-3 ${alert.severity === 'critical' ? 'bg-red-100 text-red-800 border border-red-200' :
-                                alert.severity === 'warning' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
-                                    'bg-blue-100 text-blue-800 border border-blue-200'
-                                }`}
-                        >
-                            <span className="text-xl">
-                                {alert.severity === 'critical' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️'}
-                            </span>
-                            <span className="font-medium">{alert.message}</span>
-                        </div>
-                    ))}
+                    {alerts.map((alert, idx) => {
+                        if (!alert || typeof alert !== 'object') return null;
+                        return (
+                            <div
+                                key={idx}
+                                className={`p-3 rounded-md flex items-center gap-3 ${alert.severity === 'critical' ? 'bg-red-100 text-red-800 border border-red-200' :
+                                    alert.severity === 'warning' ? 'bg-yellow-100 text-yellow-800 border border-yellow-200' :
+                                        'bg-blue-100 text-blue-800 border border-blue-200'
+                                    }`}
+                            >
+                                <span className="text-xl">
+                                    {alert.severity === 'critical' ? '🚨' : alert.severity === 'warning' ? '⚠️' : 'ℹ️'}
+                                </span>
+                                <span className="font-medium">{alert?.message || 'No message'}</span>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 
             {/* Key Metrics Grid - Responsive: 2 cols on mobile, 4 on desktop */}
-            {stats.length > 0 && (
+            {stats && Array.isArray(stats) && stats.length > 0 && (
                 <div className="dashboard-stats grid grid-cols-2 md:grid-cols-4 gap-4">
                     {stats.map(renderStat)}
                 </div>
             )}
 
             {/* Charts Grid - Uses responsive classes for mobile stacking */}
-            {charts.length > 0 && (
+            {charts && Array.isArray(charts) && charts.length > 0 && (
                 <div className="dashboard-charts visualization-grid grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {charts.map((chart, idx) => (
-                        <div key={idx} className="chart-wrapper p-4 border rounded-lg shadow-sm bg-white responsive-visualization">
-                            <Chart
-                                type={chart.type}
-                                data={chart.data}
-                                xColumn={chart.xKey}
-                                yColumn={chart.yKey}
-                                title={chart.title}
-                            />
-                        </div>
-                    ))}
+                    {charts.map((chart, idx) => {
+                        if (!chart || typeof chart !== 'object') return null;
+                        return (
+                            <div key={idx} className="chart-wrapper p-4 border rounded-lg shadow-sm bg-white responsive-visualization">
+                                <Chart
+                                    type={chart.type}
+                                    data={chart.data || []}
+                                    xColumn={chart.xKey}
+                                    yColumn={chart.yKey}
+                                    title={chart.title}
+                                />
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 
             {/* Tables */}
-            {tables.length > 0 && (
+            {tables && Array.isArray(tables) && tables.length > 0 && (
                 <div className="dashboard-tables space-y-6">
-                    {tables.map((table, idx) => (
-                        <div key={idx} className="table-wrapper">
-                            <h3 className="text-lg font-semibold text-gray-800 mb-3">{table.title}</h3>
-                            <DataTable data={table.data} title={table.title} />
-                        </div>
-                    ))}
+                    {tables.map((table, idx) => {
+                        if (!table || typeof table !== 'object') return null;
+                        return (
+                            <div key={idx} className="table-wrapper">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-3">{table?.title || 'Table'}</h3>
+                                <DataTable data={table.data || []} title={table.title} />
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>

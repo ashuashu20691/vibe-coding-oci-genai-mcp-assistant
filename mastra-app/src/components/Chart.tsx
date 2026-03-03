@@ -113,23 +113,35 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
   ];
   // Process data for charting
   const chartData = useMemo(() => {
-    return data.map((row, index) => ({
-      ...row,
-      _index: index,
-      [xColumn]: row[xColumn],
-      [yColumn]: typeof row[yColumn] === 'number' ? row[yColumn] : parseFloat(String(row[yColumn])) || 0,
-    }));
+    // Add data structure validation before processing
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      return [];
+    }
+    
+    return data.map((row, index) => {
+      // Validate row is an object
+      if (!row || typeof row !== 'object') {
+        return { _index: index };
+      }
+      
+      return {
+        ...row,
+        _index: index,
+        [xColumn]: row[xColumn],
+        [yColumn]: typeof row[yColumn] === 'number' ? row[yColumn] : parseFloat(String(row[yColumn])) || 0,
+      };
+    });
   }, [data, xColumn, yColumn]);
 
   // Get unique color values if colorColumn is specified
   const colorValues = useMemo(() => {
-    if (!colorColumn) return [];
-    const values = new Set(data.map(row => String(row[colorColumn])));
+    if (!colorColumn || !data || !Array.isArray(data)) return [];
+    const values = new Set(data.map(row => row && row[colorColumn] ? String(row[colorColumn]) : ''));
     return Array.from(values);
   }, [data, colorColumn]);
 
   // Handle empty data
-  if (data.length === 0) {
+  if (!data || !Array.isArray(data) || data.length === 0) {
     return (
       <div className="chart-empty p-8 text-gray-500 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
         <svg className="mx-auto h-12 w-12 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

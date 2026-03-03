@@ -20,6 +20,9 @@ import { generateVisualization } from '@/mastra/agents/visualization-agent';
 import { classifyUserIntent, generateClarificationPrompt, SUPERVISOR_AGENT_INSTRUCTIONS } from '@/mastra/agents/supervisor-agent';
 import { createChatService, ENHANCED_SYSTEM_PROMPT } from '@/services/chat-service';
 import { NarrativeStreamingService } from '@/services/narrative-streaming-service';
+import { workflowOrchestrator, WorkflowStep, WorkflowContext, ProgressEvent } from '@/services/workflow-orchestrator';
+import { schemaDiscoveryService } from '@/services/schema-discovery';
+import { ResultPresenter, PresentationConfig } from '@/services/result-presenter';
 
 const config = loadConfig();
 
@@ -33,6 +36,7 @@ interface ChatRequestBody {
   messages: Message[];
   modelId: string;
   conversationId?: string;
+  selectedDatabase?: string; // Selected database connection from UI
 }
 
 /**
@@ -62,6 +66,84 @@ function extractDataFromToolResult(result: unknown): Record<string, unknown>[] |
   } catch {
     return null;
   }
+}
+
+/**
+ * Detect if query result contains multi-modal content (images, similarity scores, etc.)
+ * Requirement 8.1, 8.2: Detect image columns and metrics
+ */
+function detectMultiModalContent(data: Record<string, unknown>[]): {
+  hasImages: boolean;
+  hasSimilarityScores: boolean;
+  hasDistances: boolean;
+  hasViewCounts: boolean;
+  imageColumns: string[];
+  similarityColumn?: string;
+  distanceColumn?: string;
+  viewCountColumn?: string;
+} {
+  if (!data || data.length === 0) {
+    return {
+      hasImages: false,
+      hasSimilarityScores: false,
+      hasDistances: false,
+      hasViewCounts: false,
+      imageColumns: [],
+    };
+  }
+
+  const firstRow = data[0];
+  const columns = Object.keys(firstRow);
+
+  // Detect image columns (base64 data, URLs, or BLOB indicators)
+  const imageColumns = columns.filter(col => {
+    const value = firstRow[col];
+    if (typeof value === 'string') {
+      return (
+        value.startsWith('data:image/') ||
+        value.startsWith('http://') ||
+        value.startsWith('https://') ||
+        col.toLowerCase().includes('image') ||
+        col.toLowerCase().includes('photo') ||
+        col.toLowerCase().includes('picture')
+      );
+    }
+    return false;
+  });
+
+  // Detect similarity score column
+  const similarityColumn = columns.find(
+    col =>
+      col.toLowerCase().includes('similarity') ||
+      col.toLowerCase().includes('distance') ||
+      col.toLowerCase() === 'score'
+  );
+
+  // Detect distance column
+  const distanceColumn = columns.find(
+    col =>
+      col.toLowerCase().includes('distance_') ||
+      (col.toLowerCase().includes('distance') && !col.toLowerCase().includes('similarity'))
+  );
+
+  // Detect view count column
+  const viewCountColumn = columns.find(
+    col =>
+      col.toLowerCase().includes('view') ||
+      col.toLowerCase().includes('count') ||
+      col.toLowerCase() === 'views'
+  );
+
+  return {
+    hasImages: imageColumns.length > 0,
+    hasSimilarityScores: !!similarityColumn,
+    hasDistances: !!distanceColumn,
+    hasViewCounts: !!viewCountColumn,
+    imageColumns,
+    similarityColumn,
+    distanceColumn,
+    viewCountColumn,
+  };
 }
 
 /**
@@ -112,9 +194,9 @@ Exception: If the user explicitly mentions a database name in their query, you c
 export async function POST(request: NextRequest) {
   try {
     const body: ChatRequestBody = await request.json();
-    const { messages, modelId, conversationId } = body;
+    const { messages, modelId, conversationId, selectedDatabase } = body;
 
-    console.log(`[chat/POST] Received request: ${messages?.length} messages, model: ${modelId}, conversationId: ${conversationId}`);
+    console.log(`[chat/POST] Received request: ${messages?.length} messages, model: ${modelId}, conversationId: ${conversationId}, database: ${selectedDatabase || 'none'}`);
 
     // Validation
     if (!messages || !Array.isArray(messages)) {
@@ -150,6 +232,16 @@ export async function POST(request: NextRequest) {
     const hasTools = Object.keys(mcpTools).length > 0;
     console.log(`[chat/POST] MCP tools: ${Object.keys(mcpTools).length} tools available`);
 
+    // Initialize workflow orchestrator with schema discovery service
+    // Requirement 4.4, 5.5: Pass selected database to workflow context and update schema cache
+    workflowOrchestrator.setSchemaDiscoveryService(schemaDiscoveryService);
+    
+    // If a database is selected, set it as the active connection
+    if (selectedDatabase) {
+      schemaDiscoveryService.setActiveConnection(selectedDatabase);
+      console.log(`[chat/POST] Set active database connection: ${selectedDatabase}`);
+    }
+
     // Create model adapter with agentic capabilities
     const modelAdapter = new OCIModelAdapter({
       provider: ociProvider,
@@ -184,6 +276,38 @@ export async function POST(request: NextRequest) {
     // DISABLED: Dedicated supplier workflow has MCP initialization issues
     // Let the normal agent handle it conversationally instead
     const isSupplierAnalysis = false; // supplierKeywords.filter(k => lastUserMessage.includes(k)).length >= 2;
+
+    // NOTE: Workflow Orchestrator Integration
+    // The WorkflowOrchestrator service is available for complex multi-step workflows.
+    // It provides:
+    // - Autonomous multi-step execution with dependency resolution (Requirement 1.1, 1.2)
+    // - Progress tracking and streaming (Requirement 1.3)
+    // - Integration with retry orchestrator for error recovery (Requirement 1.3)
+    // - Insight generation from completed workflows (Requirement 1.7)
+    // - Database context management (Requirement 4.4, 5.5)
+    //
+    // To use it for complex queries:
+    // 1. Detect complex workflow patterns (multi-step, multi-modal, etc.)
+    // 2. Create WorkflowStep[] with dependencies
+    // 3. Create context with selected database:
+    //    const context: WorkflowContext = {
+    //      database: selectedDatabase,
+    //      conversationId,
+    //      userId: 'user-id',
+    //    };
+    // 4. Call workflowOrchestrator.createExecutionPlan(steps, context)
+    // 5. Execute with workflowOrchestrator.execute(plan, progressCallback)
+    // 6. Stream progress events to client
+    //
+    // The workflow orchestrator automatically:
+    // - Passes the selected database to all workflow steps
+    // - Invalidates schema cache when database changes (Requirement 5.5)
+    // - Maintains schema cache for the session duration
+    //
+    // Currently, the chat API uses ChatService for conversational tool execution,
+    // which provides similar capabilities through the agent's autonomous operation.
+    // The WorkflowOrchestrator can be integrated when explicit multi-step workflows
+    // are needed (e.g., "first do X, then Y, then Z" type queries).
 
     // Check if this is an intelligent data analysis request
     const analysisKeywords = [
@@ -381,7 +505,19 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     let lastQueryData: Record<string, unknown>[] | null = null; // Store last query data for visualization
 
     // AUTONOMOUS MODE: Always use database agent instructions for autonomous operation
-    const systemInstructions = DATABASE_AGENT_INSTRUCTIONS;
+    let systemInstructions = DATABASE_AGENT_INSTRUCTIONS;
+    
+    // Inject active connection context if database is selected
+    if (selectedDatabase) {
+      // Update agent state to track the selected database
+      if (conversationId) {
+        updateAgentState(conversationId, { activeConnection: selectedDatabase });
+      }
+      
+      systemInstructions += `\n\nCURRENT CONTEXT:\n- User has selected database: ${selectedDatabase}\n- Connect to this database using sqlcl_connect tool with connection_name="${selectedDatabase}"\n- After connecting, proceed with the user's query\n- Do NOT list connections or ask which database to use`;
+    } else if (agentState?.activeConnection) {
+      systemInstructions += `\n\nCURRENT CONTEXT:\n- User has selected database: ${agentState.activeConnection}\n- Connect to this database using sqlcl_connect tool with connection_name="${agentState.activeConnection}"\n- After connecting, proceed with the user's query\n- Do NOT list connections or ask which database to use`;
+    }
 
     // Create narrative streaming service
     const narrativeService = new NarrativeStreamingService();
@@ -633,6 +769,62 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                   const data = extractDataFromToolResult(event.result.content);
                   if (data && data.length > 0) {
                     lastQueryData = data;
+                    
+                    // Detect multi-modal content (Requirement 8.1, 8.2)
+                    const multiModalInfo = detectMultiModalContent(data);
+                    
+                    // If result contains images or multi-modal metrics, format with ResultPresenter
+                    // Requirement 8.1: Handle image embedding in results
+                    // Requirement 8.2: Format similarity scores, view counts, distances
+                    // Requirement 8.6, 8.7: Route to artifacts panel or inline
+                    if (multiModalInfo.hasImages || multiModalInfo.hasSimilarityScores) {
+                      try {
+                        const resultPresenter = new ResultPresenter();
+                        
+                        // Configure presentation based on detected columns
+                        const presentationConfig: PresentationConfig = {
+                          imageColumns: multiModalInfo.imageColumns,
+                          similarityColumn: multiModalInfo.similarityColumn,
+                          viewCountColumn: multiModalInfo.viewCountColumn,
+                          distanceColumn: multiModalInfo.distanceColumn,
+                          distanceUnit: multiModalInfo.distanceColumn?.includes('km') ? 'km' : 'miles',
+                          preserveAspectRatio: true,
+                          maxImageWidth: 400,
+                          maxImageHeight: 400,
+                        };
+                        
+                        // Format results with ResultPresenter
+                        const formattedResult = resultPresenter.formatResults(
+                          { data, columns: Object.keys(data[0] || {}) },
+                          presentationConfig
+                        );
+                        
+                        // Generate HTML for display
+                        const layout = formattedResult.type === 'gallery' ? 'grid' : 'list';
+                        const html = resultPresenter.generateHTML(formattedResult, layout);
+                        
+                        // Emit as visualization that routes to artifacts panel
+                        // Requirement 8.6: Route large results to artifacts panel
+                        controller.enqueue(
+                          encoder.encode(
+                            `data: ${JSON.stringify({
+                              visualization: {
+                                type: formattedResult.type === 'grouped_gallery' ? 'grouped_gallery' : 'gallery',
+                                html,
+                                title: 'Multi-Modal Query Results',
+                                metadata: formattedResult.metadata,
+                              }
+                            })}\n\n`
+                          )
+                        );
+                        
+                        console.log(`[chat/POST] Formatted multi-modal result with ${formattedResult.metadata.totalRows} rows`);
+                      } catch (presenterError) {
+                        console.error('[chat/POST] ResultPresenter error:', presenterError);
+                        // Fall through to standard visualization
+                      }
+                    }
+                    
                     try {
                       // Generate analysis
                       const analysis = analyzeData({ data, query: 'SQL query' });
@@ -646,7 +838,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                       const isVisualizationRequested = userIntent.visualizationType || 
                         lastUserMessageOriginal.toLowerCase().match(/\b(visuali[sz]e|chart|graph|plot|dashboard|show.*visual|create.*visual)\b/);
                       
-                      if (isVisualizationRequested) {
+                      if (isVisualizationRequested && !multiModalInfo.hasImages) {
                         let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' | 'map' | 'timeline' | 'photo_gallery' = 'auto';
                         let vizTitle = 'Data Visualization';
 

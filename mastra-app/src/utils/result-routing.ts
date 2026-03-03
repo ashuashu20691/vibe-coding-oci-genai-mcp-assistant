@@ -5,17 +5,19 @@ import type { Message } from '@/types';
 
 /**
  * Result routing logic for tool outputs
- * Validates: Requirements 15.2, 15.3, 15.4, 15.5, 18.7
+ * Validates: Requirements 8.6, 8.7, 8.8, 15.2, 15.3, 15.4, 15.5, 18.7
  */
 
 /**
  * Determines if a visualization should be routed to the artifacts panel
  * 
- * Routing rules:
- * - Visual outputs (charts, maps, diagrams) → Always route to artifacts panel
- * - Tables with > MAX_INLINE_ROWS → Route to artifacts panel
- * - Small tables (≤ MAX_INLINE_ROWS) → Display inline in chat
- * - Textual results → Display inline in chat
+ * Routing rules (Requirements 8.6, 8.7):
+ * - Visual outputs (charts, maps, diagrams, galleries) → Always route to artifacts panel (right 40%)
+ * - Tables with > MAX_INLINE_ROWS → Route to artifacts panel (right 40%)
+ * - Small tables (≤ MAX_INLINE_ROWS) → Display inline in chat (left 60%)
+ * - Textual results → Display inline in chat (left 60%)
+ * - Image galleries → Always route to artifacts panel (right 40%)
+ * - Dashboards with multiple widgets → Always route to artifacts panel (right 40%)
  * 
  * @param visualization - The visualization object from a message
  * @returns true if should route to artifacts panel, false if should display inline
@@ -23,7 +25,7 @@ import type { Message } from '@/types';
 export function shouldRouteToArtifacts(visualization: Message['visualization']): boolean {
   if (!visualization) return false;
   
-  // Visual outputs always go to artifacts panel (Requirement 15.2, 18.7)
+  // Visual outputs always go to artifacts panel (Requirement 8.6, 8.7, 15.2, 18.7)
   const visualTypes = [
     'bar_chart',
     'line_chart', 
@@ -36,25 +38,28 @@ export function shouldRouteToArtifacts(visualization: Message['visualization']):
     'timeline',
     'mermaid',
     'custom_dashboard',
-    'analysis_dashboard'
+    'analysis_dashboard',
+    'gallery', // Added for multi-modal image results
+    'grouped_gallery', // Added for grouped image results
   ];
   
   if (visualTypes.includes(visualization.type)) {
     return true;
   }
   
-  // Tables with more than MAX_INLINE_ROWS go to artifacts panel (Requirement 15.2)
+  // Tables with more than MAX_INLINE_ROWS go to artifacts panel (Requirement 8.6, 15.2)
   if (visualization.type === 'table' && visualization.data) {
     const rowCount = Array.isArray(visualization.data) ? visualization.data.length : 0;
     return rowCount > MAX_INLINE_ROWS;
   }
   
-  // Everything else stays inline (small tables, textual results)
+  // Everything else stays inline (small tables, textual results) (Requirement 8.7)
   return false;
 }
 
 /**
  * Detects the size and type of tool result data
+ * Enhanced to detect image galleries and multi-modal content
  * 
  * @param data - The tool result data
  * @returns Object with size and type information
@@ -64,14 +69,24 @@ export function detectResultSizeAndType(data: unknown): {
   isVisual: boolean;
   isTabular: boolean;
   isTextual: boolean;
+  hasImages: boolean;
 } {
   // Check if data is an array (tabular)
   if (Array.isArray(data)) {
+    // Check if array contains image data
+    const hasImages = data.some(
+      item =>
+        item &&
+        typeof item === 'object' &&
+        ('image' in item || 'imageUrl' in item || 'imageData' in item)
+    );
+
     return {
       rowCount: data.length,
-      isVisual: false,
-      isTabular: true,
+      isVisual: hasImages,
+      isTabular: !hasImages,
       isTextual: false,
+      hasImages,
     };
   }
   
@@ -81,15 +96,27 @@ export function detectResultSizeAndType(data: unknown): {
     const visualTypes = [
       'bar_chart', 'line_chart', 'pie_chart', 'scatter_chart', 'area_chart',
       'map', 'heat_map', 'photo_gallery', 'timeline', 'mermaid',
-      'custom_dashboard', 'analysis_dashboard'
+      'custom_dashboard', 'analysis_dashboard', 'gallery', 'grouped_gallery'
     ];
     
     if (visualTypes.includes(type)) {
+      // Check if it has images
+      const hasImages =
+        type === 'photo_gallery' ||
+        type === 'gallery' ||
+        type === 'grouped_gallery' ||
+        ('data' in data &&
+          Array.isArray((data as { data: unknown }).data) &&
+          (data as { data: unknown[] }).data.some(
+            item => item && typeof item === 'object' && 'image' in item
+          ));
+
       return {
         rowCount: 0,
         isVisual: true,
         isTabular: false,
         isTextual: false,
+        hasImages,
       };
     }
     
@@ -101,6 +128,7 @@ export function detectResultSizeAndType(data: unknown): {
         isVisual: false,
         isTabular: true,
         isTextual: false,
+        hasImages: false,
       };
     }
   }
@@ -111,5 +139,58 @@ export function detectResultSizeAndType(data: unknown): {
     isVisual: false,
     isTabular: false,
     isTextual: true,
+    hasImages: false,
   };
+}
+
+/**
+ * Determines the appropriate layout for a result
+ * Requirement 8.5: Support both grid and list layouts
+ * 
+ * @param data - The result data
+ * @returns Layout type ('grid' or 'list')
+ */
+export function determineLayout(data: unknown): 'grid' | 'list' {
+  const info = detectResultSizeAndType(data);
+
+  // Image galleries use grid layout
+  if (info.hasImages) {
+    return 'grid';
+  }
+
+  // Large tables use list layout
+  if (info.isTabular && info.rowCount > 20) {
+    return 'list';
+  }
+
+  // Default to grid for visual content
+  if (info.isVisual) {
+    return 'grid';
+  }
+
+  return 'list';
+}
+
+/**
+ * Determines if content should be displayed in the artifacts panel based on size and type
+ * Requirement 8.6, 8.7: Route large tables/charts to artifacts panel, keep small results inline
+ * 
+ * @param data - The result data
+ * @returns true if should route to artifacts panel
+ */
+export function shouldRouteDataToArtifacts(data: unknown): boolean {
+  const info = detectResultSizeAndType(data);
+
+  // Visual content always goes to artifacts panel
+  if (info.isVisual) {
+    return true;
+  }
+
+  // Large tables go to artifacts panel
+  if (info.isTabular && info.rowCount > MAX_INLINE_ROWS) {
+    return true;
+  }
+
+  // Small tables and textual content stay inline
+  return false;
 }

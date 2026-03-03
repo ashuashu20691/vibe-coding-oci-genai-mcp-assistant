@@ -183,6 +183,12 @@ export function SQLPlayground({ connectionName }: SQLPlaygroundProps) {
           </button>
         </div>
       </div>
+      
+      {/* Info banner about multi-modal builder */}
+      <div className="px-3 py-2 bg-purple-50 border-b border-purple-100 text-sm text-purple-800 flex items-center justify-between">
+        <span>💡 Need vector search, geospatial, or temporal filters?</span>
+        <span className="text-purple-600 font-medium">Use MultiModalSQLPlayground component</span>
+      </div>
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">

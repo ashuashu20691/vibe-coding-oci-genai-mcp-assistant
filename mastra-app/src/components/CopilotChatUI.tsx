@@ -2,12 +2,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Conversation, Message, Artifact, ArtifactModification } from '@/types';
 import { MessageList } from './MessageList';
-import { ThinkingStep } from './AgentThinking';
 import { WorkingBadge } from './WorkingBadge';
 import { ArtifactsPanel } from './ArtifactsPanel';
 import { MainLayout } from './MainLayout';
 import { useArtifacts } from '@/hooks/useArtifacts';
 import { shouldRouteToArtifacts } from '@/utils/result-routing';
+import { DatabaseSelector } from './DatabaseSelector';
 
 const DEFAULT_MODEL = 'google.gemini-2.5-flash';
 
@@ -31,7 +31,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([]);
+  const [selectedDatabase, setSelectedDatabase] = useState<string>('');
   const [iterationState, setIterationState] = useState<IterationState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fadeOutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -253,6 +253,13 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     }
   }, [conversationId]);
 
+  const handleDatabaseChange = useCallback((connectionName: string) => {
+    setSelectedDatabase(connectionName);
+    // Persist to localStorage (handled by DatabaseSelector)
+    // Update conversation context when database changes (Requirement 4.4)
+    console.log(`[CopilotChatUI] Database changed to: ${connectionName}`);
+  }, []);
+
   const sendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     
@@ -274,7 +281,6 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     
     setMessages((p) => [...p, userMsg]);
     setIsLoading(true);
-    setThinkingSteps([]);
     setIterationState(null); // Reset iteration state on new message
 
     if (conversationId) {
@@ -300,7 +306,12 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: allMsgs, modelId: selectedModel, conversationId }),
+        body: JSON.stringify({ 
+          messages: allMsgs, 
+          modelId: selectedModel, 
+          conversationId,
+          selectedDatabase: selectedDatabase || undefined, // Include selected database
+        }),
       });
 
       if (!res.ok) throw new Error('Failed');
@@ -340,6 +351,17 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
                   u[u.length - 1] = { ...l, content: l.content + p.content };
+                }
+                return u;
+              });
+            } else if (p.toolCall) {
+              // Handle real-time tool call events (Requirement 12.2, 12.5)
+              setMessages((prev) => {
+                const u = [...prev];
+                const l = u[u.length - 1];
+                if (l?.role === 'assistant') {
+                  const toolCalls = l.toolCalls || [];
+                  u[u.length - 1] = { ...l, toolCalls: [...toolCalls, p.toolCall] };
                 }
                 return u;
               });
@@ -626,6 +648,11 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           <option value="cohere.command-r-plus">Command R+</option>
           <option value="meta.llama-3.1-70b">Llama 3.1 70B</option>
         </select>
+
+        <DatabaseSelector
+          value={selectedDatabase}
+          onChange={handleDatabaseChange}
+        />
       </div>
 
       {/* Messages */}
@@ -633,7 +660,6 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         messages={messages}
         isLoading={isLoading}
         isStreaming={isLastMessageStreaming}
-        thinkingSteps={thinkingSteps}
         onSuggestionClick={setInput}
       />
 

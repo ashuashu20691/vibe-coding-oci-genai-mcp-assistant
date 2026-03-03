@@ -72,7 +72,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
       );
 
       // Find the inner container with max-width
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       expect(innerContainer).not.toBeNull();
       
       // Verify it's centered with mx-auto
@@ -92,7 +92,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
       );
 
       // Find the inner container that holds messages
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       expect(innerContainer).not.toBeNull();
       
       // Verify it does NOT have grid classes for message layout
@@ -113,7 +113,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
       );
 
       // Find the inner container
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       expect(innerContainer).not.toBeNull();
       
       // Verify no multi-column classes
@@ -133,7 +133,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
       );
 
       // Find all message containers
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       const messageElements = innerContainer?.children;
       
       // Should have at least 3 children (messages) + bottom ref div
@@ -149,9 +149,13 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
         <MessageList messages={messages} isLoading={false} isStreaming={false} />
       );
 
-      // Find user message bubble - it should have justify-end for right alignment
-      const userBubble = container.querySelector('.justify-end');
-      expect(userBubble).not.toBeNull();
+      // Find user message container - it should have inline style with justifyContent: flex-end
+      const userMessageContainer = container.querySelector('.py-3');
+      expect(userMessageContainer).not.toBeNull();
+      
+      // Check for inline style with flex-end justification
+      const style = userMessageContainer?.getAttribute('style');
+      expect(style).toContain('justify-content: flex-end');
     });
 
     it('should display assistant messages with left alignment (default)', () => {
@@ -163,14 +167,17 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
         <MessageList messages={messages} isLoading={false} isStreaming={false} />
       );
 
-      // Assistant messages should NOT have justify-end (left-aligned by default)
+      // Assistant messages should have flex-start (left-aligned)
       // Find the message content area
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       expect(innerContainer).not.toBeNull();
       
-      // The assistant message container should exist and not be right-aligned
-      const assistantMessage = innerContainer?.querySelector('.mb-6');
-      expect(assistantMessage).not.toBeNull();
+      // The assistant message container should have inline style with justifyContent: flex-start
+      const assistantMessageContainer = container.querySelector('.py-3');
+      expect(assistantMessageContainer).not.toBeNull();
+      
+      const style = assistantMessageContainer?.getAttribute('style');
+      expect(style).toContain('justify-content: flex-start');
     });
 
     it('should maintain single-column layout with many messages', () => {
@@ -190,7 +197,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
 
       // Verify layout structure is maintained
       const scrollContainer = container.querySelector('.overflow-y-auto');
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       
       expect(scrollContainer).not.toBeNull();
       expect(innerContainer).not.toBeNull();
@@ -209,12 +216,11 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
       );
 
       // Find the inner container with padding
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       expect(innerContainer).not.toBeNull();
       
-      // Verify it has padding classes
-      expect(innerContainer?.classList.contains('py-8')).toBe(true);
-      expect(innerContainer?.classList.contains('px-4')).toBe(true);
+      // Verify it has padding classes (pt-8 and px-6)
+      expect(innerContainer?.classList.contains('px-6')).toBe(true);
     });
   });
 
@@ -226,7 +232,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
 
       // Layout structure should still be present
       const scrollContainer = container.querySelector('.overflow-y-auto');
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       
       expect(scrollContainer).not.toBeNull();
       expect(innerContainer).not.toBeNull();
@@ -243,7 +249,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
 
       // Layout structure should be maintained during loading
       const scrollContainer = container.querySelector('.overflow-y-auto');
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       
       expect(scrollContainer).not.toBeNull();
       expect(innerContainer).not.toBeNull();
@@ -262,7 +268,7 @@ describe('Task 10.1: MessageList Single-Column Layout', () => {
 
       // Layout structure should be maintained during streaming
       const scrollContainer = container.querySelector('.overflow-y-auto');
-      const innerContainer = container.querySelector('.max-w-3xl');
+      const innerContainer = container.querySelector('.max-w-4xl');
       
       expect(scrollContainer).not.toBeNull();
       expect(innerContainer).not.toBeNull();

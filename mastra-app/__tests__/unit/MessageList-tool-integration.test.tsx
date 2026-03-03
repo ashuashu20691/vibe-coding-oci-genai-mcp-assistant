@@ -1,11 +1,12 @@
 /**
  * Unit tests for MessageList component - Tool Details Integration
- * Validates: Requirement 18.3 - Tool details integrated into conversational text
+ * Validates: Requirement 12.2, 12.5 - Tool execution display with expandable details
  * 
- * Tests that tool execution details appear as natural conversational text
- * within assistant messages, not as separate UI event cards.
+ * Tests that tool execution details appear as expandable Claude Desktop-style
+ * tool execution displays within assistant messages.
  */
 
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MessageList } from '@/components/MessageList';
 import { Message } from '@/types';
@@ -15,8 +16,8 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
-  it('should NOT render ToolCallDisplay component for messages with tool calls', () => {
+describe('MessageList - Tool Details Integration (Requirement 12.2, 12.5)', () => {
+  it('should render ToolExecutionDisplay component for messages with tool calls', () => {
     // Arrange: Create a message with tool calls
     const messages: Message[] = [
       {
@@ -40,18 +41,15 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     // Act: Render the MessageList
     const { container } = render(<MessageList messages={messages} />);
 
-    // Assert: Tool details should be in conversational text, not as separate cards
-    // The content should contain the conversational description
-    expect(screen.getByText(/I ran a query with the following parameters/i)).toBeInTheDocument();
+    // Assert: Tool execution display should be rendered
+    expect(screen.getByText('Execute Query')).toBeInTheDocument();
+    expect(screen.getByText('Completed')).toBeInTheDocument();
     
-    // Should NOT have the "Used X tools" button that ToolCallDisplay creates
-    expect(screen.queryByText(/Used \d+ tool/i)).not.toBeInTheDocument();
-    
-    // Should NOT have expandable tool call items
-    expect(container.querySelector('[class*="tool"]')).toBeNull();
+    // Should have the tool execution display
+    expect(container.querySelector('.tool-execution')).toBeInTheDocument();
   });
 
-  it('should display tool details as natural conversational text', () => {
+  it('should display tool details as expandable components', () => {
     // Arrange: Create a message with conversational tool narrative
     const messages: Message[] = [
       {
@@ -74,16 +72,13 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     // Act: Render the MessageList
     render(<MessageList messages={messages} />);
 
-    // Assert: Tool details should be integrated into the conversational text
+    // Assert: Tool execution display should be present
+    expect(screen.getByText('Describe Table')).toBeInTheDocument();
     expect(screen.getByText(/Let me check the database schema/i)).toBeInTheDocument();
-    expect(screen.getByText(/I'll run describe_table with table_name="SUPPLIERS"/i)).toBeInTheDocument();
-    
-    // Should NOT have separate tool execution cards
-    expect(screen.queryByText(/Used 1 tool/i)).not.toBeInTheDocument();
   });
 
-  it('should display multiple tool calls as conversational narrative', () => {
-    // Arrange: Create a message with multiple tool calls in conversational format
+  it('should display multiple tool calls as separate execution displays', () => {
+    // Arrange: Create a message with multiple tool calls
     const messages: Message[] = [
       {
         id: '1',
@@ -111,15 +106,16 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     ];
 
     // Act: Render the MessageList
-    render(<MessageList messages={messages} />);
+    const { container } = render(<MessageList messages={messages} />);
 
-    // Assert: All tool narratives should be in conversational text
-    expect(screen.getByText(/First, I'll list the available connections/i)).toBeInTheDocument();
-    expect(screen.getByText(/Then I'll connect to LiveLab/i)).toBeInTheDocument();
-    expect(screen.getByText(/Now let me query the suppliers table/i)).toBeInTheDocument();
+    // Assert: All tool execution displays should be rendered
+    expect(screen.getByText('List Connections')).toBeInTheDocument();
+    expect(screen.getByText('Connect')).toBeInTheDocument();
+    expect(screen.getByText('Execute Query')).toBeInTheDocument();
     
-    // Should NOT have "Used 3 tools" button
-    expect(screen.queryByText(/Used 3 tools/i)).not.toBeInTheDocument();
+    // Should have 3 tool execution displays
+    const toolExecutions = container.querySelectorAll('.tool-execution');
+    expect(toolExecutions).toHaveLength(3);
   });
 
   it('should render messages without tool calls normally', () => {
@@ -134,13 +130,14 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     ];
 
     // Act: Render the MessageList
-    render(<MessageList messages={messages} />);
+    const { container } = render(<MessageList messages={messages} />);
 
-    // Assert: Content should be displayed normally
+    // Assert: Content should be displayed normally without tool displays
     expect(screen.getByText(/Here are the results from the query/i)).toBeInTheDocument();
+    expect(container.querySelector('.tool-execution')).not.toBeInTheDocument();
   });
 
-  it('should display tool results as conversational text', () => {
+  it('should display tool results with execution displays', () => {
     // Arrange: Create a message with tool result narrative
     const messages: Message[] = [
       {
@@ -161,12 +158,9 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     // Act: Render the MessageList
     render(<MessageList messages={messages} />);
 
-    // Assert: Tool result should be described conversationally
+    // Assert: Both tool display and result text should be present
+    expect(screen.getByText('Execute Query')).toBeInTheDocument();
     expect(screen.getByText(/I found 15 suppliers in the database/i)).toBeInTheDocument();
-    expect(screen.getByText(/most suppliers are located in the US and Europe/i)).toBeInTheDocument();
-    
-    // Should NOT have separate result display cards
-    expect(screen.queryByText(/Used 1 tool/i)).not.toBeInTheDocument();
   });
 
   it('should handle empty tool calls array gracefully', () => {
@@ -182,10 +176,10 @@ describe('MessageList - Tool Details Integration (Requirement 18.3)', () => {
     ];
 
     // Act: Render the MessageList
-    render(<MessageList messages={messages} />);
+    const { container } = render(<MessageList messages={messages} />);
 
     // Assert: Should render content normally without tool display
     expect(screen.getByText(/Processing your request/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Used 0 tools/i)).not.toBeInTheDocument();
+    expect(container.querySelector('.tool-execution')).not.toBeInTheDocument();
   });
 });
