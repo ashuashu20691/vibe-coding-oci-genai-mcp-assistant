@@ -7,7 +7,6 @@ import { ArtifactsPanel } from './ArtifactsPanel';
 import { MainLayout } from './MainLayout';
 import { useArtifacts } from '@/hooks/useArtifacts';
 import { shouldRouteToArtifacts } from '@/utils/result-routing';
-import { DatabaseSelector } from './DatabaseSelector';
 
 const DEFAULT_MODEL = 'google.gemini-2.5-flash';
 
@@ -31,8 +30,8 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
-  const [selectedDatabase, setSelectedDatabase] = useState<string>('');
   const [iterationState, setIterationState] = useState<IterationState | null>(null);
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; description: string }>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fadeOutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
@@ -131,6 +130,20 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         createdAt: now,
         updatedAt: now,
       };
+    } else if (visualization.html) {
+      // HTML-based visualizations (automatic_report, html, custom_dashboard, etc.)
+      return {
+        id: artifactId,
+        type: 'html',
+        title: visualization.title || 'Dashboard',
+        content: {
+          type: 'html',
+          html: visualization.html,
+        },
+        version: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
     }
     
     return null;
@@ -159,6 +172,29 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
   }, [iterationState?.isFadingOut]);
 
   useEffect(() => {
+    fetchConversations();
+  }, [conversationId]);
+
+  // Load available models from API
+  useEffect(() => {
+    fetch('/api/models')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((models) => {
+        if (Array.isArray(models) && models.length > 0) {
+          setAvailableModels(models);
+        }
+      })
+      .catch(() => {
+        // Fallback to default models if API fails
+        setAvailableModels([
+          { id: 'google.gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Fast and efficient' },
+          { id: 'cohere.command-r-plus', name: 'Command R+', description: 'Advanced reasoning' },
+          { id: 'meta.llama-3.1-70b-instruct', name: 'Llama 3.1 70B', description: 'Efficient model' },
+        ]);
+      });
+  }, []);
+
+  const fetchConversations = useCallback(() => {
     fetch('/api/conversations')
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
@@ -172,18 +208,26 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         );
       })
       .catch(() => {});
-  }, [conversationId]);
+  }, []);
 
   const loadConversation = async (conv: Conversation) => {
+    console.log('[loadConversation] Loading conversation:', conv.id);
     setConversationId(conv.id);
     if (conv.modelId) setSelectedModel(conv.modelId);
     
-    const r = await fetch('/api/conversations/' + conv.id + '/messages');
-    if (r.ok) {
-      const data = await r.json();
-      const arr = Array.isArray(data) ? data : [];
-      setMessages(
-        arr.map((m: {
+    try {
+      const r = await fetch('/api/conversations/' + conv.id);
+      console.log('[loadConversation] API response status:', r.status);
+      
+      if (r.ok) {
+        const data = await r.json();
+        console.log('[loadConversation] API response data:', data);
+        console.log('[loadConversation] Messages array:', data.messages);
+        
+        const arr = Array.isArray(data.messages) ? data.messages : [];
+        console.log('[loadConversation] Processing', arr.length, 'messages');
+        
+        const processedMessages = arr.map((m: {
           id: string;
           role: string;
           content: string;
@@ -207,8 +251,16 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           visualization: m.visualization as Message['visualization'],
           analysis: m.analysis as Message['analysis'],
           toolErrors: m.toolErrors as Message['toolErrors'],
-        }))
-      );
+        }));
+        
+        console.log('[loadConversation] Processed messages:', processedMessages);
+        setMessages(processedMessages);
+        console.log('[loadConversation] Messages state updated');
+      } else {
+        console.error('[loadConversation] API request failed:', r.status, r.statusText);
+      }
+    } catch (error) {
+      console.error('[loadConversation] Error loading conversation:', error);
     }
     
     // Restore artifact from conversation (Requirement 15.6)
@@ -253,13 +305,6 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     }
   }, [conversationId]);
 
-  const handleDatabaseChange = useCallback((connectionName: string) => {
-    setSelectedDatabase(connectionName);
-    // Persist to localStorage (handled by DatabaseSelector)
-    // Update conversation context when database changes (Requirement 4.4)
-    console.log(`[CopilotChatUI] Database changed to: ${connectionName}`);
-  }, []);
-
   const sendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     
@@ -283,9 +328,36 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     setIsLoading(true);
     setIterationState(null); // Reset iteration state on new message
 
-    if (conversationId) {
+    // Create conversation if it doesn't exist
+    let currentConversationId = conversationId;
+    if (!currentConversationId) {
       try {
-        await fetch(`/api/conversations/${conversationId}/messages`, {
+        const createRes = await fetch('/api/conversations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: userMsg.content.slice(0, 50), // Use first 50 chars as title
+            modelId: selectedModel,
+          }),
+        });
+        
+        if (createRes.ok) {
+          const newConv = await createRes.json();
+          currentConversationId = newConv.id;
+          setConversationId(newConv.id);
+          console.log('[CopilotChatUI] Created new conversation:', newConv.id);
+          // Refresh conversations list to show the new conversation
+          fetchConversations();
+        }
+      } catch (err) {
+        console.error('Failed to create conversation:', err);
+      }
+    }
+
+    // Save user message
+    if (currentConversationId) {
+      try {
+        await fetch(`/api/conversations/${currentConversationId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -309,8 +381,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         body: JSON.stringify({ 
           messages: allMsgs, 
           modelId: selectedModel, 
-          conversationId,
-          selectedDatabase: selectedDatabase || undefined, // Include selected database
+          conversationId: currentConversationId, // Use the current conversation ID
         }),
       });
 
@@ -487,7 +558,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         return prev;
       });
     }
-  }, [input, isLoading, conversationId, messages, selectedModel, shouldRouteToArtifactsPanel, createArtifactFromVisualization, setArtifact, artifact, updateArtifact]);
+  }, [input, isLoading, conversationId, messages, selectedModel, shouldRouteToArtifactsPanel, createArtifactFromVisualization, setArtifact, artifact, updateArtifact, fetchConversations]);
 
   const formatDate = (d: Date) => {
     const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
@@ -505,35 +576,24 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
 
   // Sidebar component
   const sidebarComponent = (
-    <div style={{
-      width: sidebarOpen ? '260px' : '0',
-      height: '100vh',
-      background: 'var(--bg-secondary)',
-      borderRight: sidebarOpen ? '1px solid var(--border-subtle)' : 'none',
-      transition: 'width 0.2s ease',
-      overflow: 'hidden',
-      flexShrink: 0
-    }}>
-      <div style={{ width: '260px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <aside 
+      className={`copilot-sidebar ${sidebarOpen ? 'open' : ''}`}
+      role="navigation"
+      aria-label="Conversation history"
+    >
+      <nav className="copilot-sidebar-inner">
         {/* New Chat Button */}
         <div style={{ padding: '12px' }}>
           <button 
             onClick={newChat}
-            style={{
-              width: '100%',
-              padding: '10px 16px',
-              borderRadius: '8px',
-              border: 'none',
-              background: 'var(--bg-primary)',
-              color: 'var(--text-primary)',
-              fontSize: '14px',
-              fontWeight: '500',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px'
+            onKeyDown={(e) => {
+              // Support Space and Enter keys for activation - Requirement 27.4
+              if (e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault();
+                newChat();
+              }
             }}
+            className="copilot-new-chat-btn"
           >
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -543,52 +603,62 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         </div>
 
         {/* Conversations */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px' }}>
+        <div className="copilot-conversations">
           {Object.entries(grouped).map(([date, convs]) => (
-            <div key={date} style={{ marginBottom: '16px' }}>
-              <div style={{ 
-                padding: '8px 12px', 
-                fontSize: '11px', 
-                fontWeight: '600',
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em'
-              }}>
+            <div key={date} className="copilot-conv-group">
+              <div className="copilot-conv-date">
                 {date}
               </div>
               {convs.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => loadConversation(c)}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    marginBottom: '2px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    background: conversationId === c.id ? 'var(--bg-tertiary)' : 'transparent',
-                    color: 'var(--text-primary)',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {c.title || 'Untitled'}
-                </button>
+                <div key={c.id} className={`copilot-conv-item ${conversationId === c.id ? 'active' : ''}`}>
+                  <button
+                    onClick={() => loadConversation(c)}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', textAlign: 'left', minWidth: 0, padding: 0 }}
+                  >
+                    <svg className="copilot-conv-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ flexShrink: 0 }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                    <span className="copilot-conv-title">{c.title || 'Untitled'}</span>
+                  </button>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!confirm('Delete this conversation?')) return;
+                      try {
+                        await fetch(`/api/conversations/${c.id}`, { method: 'DELETE' });
+                        if (conversationId === c.id) { setConversationId(null); setMessages([]); }
+                        fetchConversations();
+                      } catch {}
+                    }}
+                    title="Delete"
+                    className="conv-delete-btn"
+                    style={{ flexShrink: 0, padding: '2px 4px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', borderRadius: '4px' }}
+                  >
+                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
               ))}
             </div>
           ))}
         </div>
-      </div>
-    </div>
+      </nav>
+    </aside>
   );
 
   // Chat panel component
   const chatPanelComponent = (
-    <>
+    <main 
+      role="main" 
+      aria-label="Chat conversation"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        overflow: 'hidden'
+      }}
+    >
       <style jsx>{`
         @keyframes fadeOut {
           from {
@@ -613,46 +683,21 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
       }}>
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '6px',
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
+          onKeyDown={(e) => {
+            // Support Space and Enter keys for activation - Requirement 27.4
+            if (e.key === ' ' || e.key === 'Enter') {
+              e.preventDefault();
+              setSidebarOpen(!sidebarOpen);
+            }
           }}
+          className="copilot-sidebar-toggle"
+          aria-label="Toggle sidebar"
+          aria-expanded={sidebarOpen}
         >
           <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-
-        <select
-          value={selectedModel}
-          onChange={(e) => handleModelChange(e.target.value)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: '6px',
-            border: 'none',
-            background: 'var(--bg-secondary)',
-            color: 'var(--text-primary)',
-            fontSize: '13px',
-            cursor: 'pointer'
-          }}
-        >
-          <option value="google.gemini-2.5-flash">Gemini 2.5 Flash</option>
-          <option value="cohere.command-r-plus">Command R+</option>
-          <option value="meta.llama-3.1-70b">Llama 3.1 70B</option>
-        </select>
-
-        <DatabaseSelector
-          value={selectedDatabase}
-          onChange={handleDatabaseChange}
-        />
       </div>
 
       {/* Messages */}
@@ -683,16 +728,17 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
 
       {/* Input */}
       <div style={{
-        borderTop: '1px solid var(--border-subtle)',
-        padding: '16px',
-        flexShrink: 0
+        padding: '12px 20px 20px',
+        flexShrink: 0,
+        background: 'var(--bg-primary)'
       }}>
-        <div style={{ maxWidth: '700px', margin: '0 auto' }}>
-          <form 
-            onSubmit={(e) => { e.preventDefault(); sendMessage(); }}
-            style={{ position: 'relative' }}
-          >
+        {/* Claude-style unified input card */}
+        <div style={{ maxWidth: '780px', margin: '0 auto', width: '100%' }}>
+          <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="chat-input-card">
+            {/* Textarea row */}
+            <label htmlFor="message-input" className="sr-only">Type your message</label>
             <textarea
+              id="message-input"
               ref={textareaRef}
               value={input}
               onChange={(e) => {
@@ -701,62 +747,56 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage();
-                }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
               }}
               placeholder="How can I help you today?"
               disabled={isLoading}
               rows={1}
-              style={{
-                width: '100%',
-                padding: '12px 48px 12px 16px',
-                borderRadius: '12px',
-                border: 'none',
-                background: 'var(--bg-secondary)',
-                color: 'var(--text-primary)',
-                fontSize: '14px',
-                lineHeight: '1.5',
-                resize: 'none',
-                outline: 'none',
-                fontFamily: 'inherit'
-              }}
+              tabIndex={0}
+              className="chat-input-textarea"
             />
-            <button
-              type="submit"
-              disabled={!input.trim() || isLoading}
-              style={{
-                position: 'absolute',
-                right: '8px',
-                bottom: '8px',
-                width: '32px',
-                height: '32px',
-                borderRadius: '8px',
-                border: 'none',
-                background: input.trim() && !isLoading ? 'var(--accent)' : 'var(--bg-tertiary)',
-                color: input.trim() && !isLoading ? 'white' : 'var(--text-muted)',
-                cursor: input.trim() && !isLoading ? 'pointer' : 'not-allowed',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              {isLoading ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 1s linear infinite' }}>
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
-                  <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" opacity="0.75" />
-                </svg>
-              ) : (
-                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-                </svg>
-              )}
-            </button>
+            {/* Bottom toolbar row */}
+            <div className="chat-input-toolbar">
+              {/* Left: spacer */}
+              <div />
+              {/* Right: model selector + send button */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <label htmlFor="model-selector" className="sr-only">Select AI model</label>
+                <select
+                  id="model-selector"
+                  value={selectedModel}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  className="chat-model-select"
+                  tabIndex={0}
+                  aria-label="Select AI model"
+                >
+                  {availableModels.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={!input.trim() || isLoading}
+                  className="chat-send-btn"
+                  aria-label="Send message"
+                >
+                  {isLoading ? (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="send-button-loading">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+                      <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" opacity="0.75" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
           </form>
         </div>
       </div>
-    </>
+    </main>
   );
 
   // Artifacts panel component (Requirement 15.1, 15.7)

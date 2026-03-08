@@ -44,6 +44,13 @@ export function ToolExecutionDisplay({ toolCall, status = 'completed' }: ToolExe
       {/* Tool header - always visible */}
       <button
         onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => {
+          // Support Space and Enter keys for activation - Requirement 27.4
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }
+        }}
         className="tool-header"
         aria-expanded={expanded}
         aria-label={`${expanded ? 'Collapse' : 'Expand'} tool execution details for ${displayName}`}
@@ -79,6 +86,7 @@ export function ToolExecutionDisplay({ toolCall, status = 'completed' }: ToolExe
         
         {/* Status indicator */}
         <span className="tool-status">
+          <span className={`status-dot ${getStatusClass(status)}`} />
           {getStatusLabel(status)}
         </span>
       </button>
@@ -148,6 +156,24 @@ function getStatusLabel(status: ToolStatus): string {
       return 'Failed';
     default:
       return '';
+  }
+}
+
+/**
+ * Get status indicator CSS class
+ */
+function getStatusClass(status: ToolStatus): string {
+  switch (status) {
+    case 'pending':
+      return 'status-available';
+    case 'executing':
+      return 'status-available'; // Use available color for executing
+    case 'completed':
+      return 'status-connected'; // Use connected (green) for completed
+    case 'failed':
+      return 'status-error';
+    default:
+      return 'status-available';
   }
 }
 

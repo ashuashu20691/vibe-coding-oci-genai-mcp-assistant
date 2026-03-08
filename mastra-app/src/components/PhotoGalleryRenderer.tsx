@@ -127,7 +127,7 @@ export function PhotoGalleryRenderer({
 
     if (!detectedImageField) {
         return (
-            <div className="p-4 text-center text-gray-500">
+            <div className="photo-gallery-empty">
                 No image field detected in data
             </div>
         );

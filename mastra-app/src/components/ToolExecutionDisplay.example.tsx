@@ -29,7 +29,6 @@ export function ToolExecutionDisplayExample() {
         arguments: {
           connection_name: 'BASE_DB_23AI',
         },
-        status: 'executing',
       },
       status: 'executing',
     },

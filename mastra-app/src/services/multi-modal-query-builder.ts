@@ -301,12 +301,20 @@ ORDER BY ${partitionClause}, row_num`;
     }
 
     const dateValue = this.formatDate(value as Date);
-    const operatorMap = {
+    const operatorMap: Record<string, string> = {
       gt: '>',
       gte: '>=',
       lt: '<',
       lte: '<=',
     };
+
+    if (operator === 'between') {
+      // Handle between case separately since it's not in operatorMap
+      const [start, end] = Array.isArray(value) ? value : [value, value];
+      const startDate = this.formatDate(start as Date);
+      const endDate = this.formatDate(end as Date);
+      return `${column} BETWEEN TO_DATE('${startDate}', 'YYYY-MM-DD') AND TO_DATE('${endDate}', 'YYYY-MM-DD')`;
+    }
 
     return `${column} ${operatorMap[operator]} TO_DATE('${dateValue}', 'YYYY-MM-DD')`;
   }

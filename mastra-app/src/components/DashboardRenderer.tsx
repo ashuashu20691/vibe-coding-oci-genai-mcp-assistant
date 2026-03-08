@@ -47,8 +47,9 @@ export function DashboardRenderer({ config }: DashboardRendererProps) {
     // Add validation before processing widgets
     if (!config || typeof config !== 'object') {
         return (
-            <div className="p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                Invalid dashboard configuration
+            <div className="empty-state">
+                <div className="empty-state-title">Invalid Configuration</div>
+                <div className="empty-state-message">Dashboard configuration is invalid or missing</div>
             </div>
         );
     }

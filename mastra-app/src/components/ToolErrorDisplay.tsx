@@ -174,6 +174,8 @@ export function ToolErrorDisplay({ error, onRetry, onDismiss }: ToolErrorDisplay
               color: 'var(--text-secondary)',
               background: 'transparent',
             }}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Hide' : 'Show'} error details`}
             data-testid="tool-error-toggle-details"
           >
             <svg 

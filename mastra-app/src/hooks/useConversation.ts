@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Conversation, Message } from '@/types';
+import { Conversation, Message, Artifact } from '@/types';
 
 interface UseConversationOptions {
   dbConnected?: boolean;

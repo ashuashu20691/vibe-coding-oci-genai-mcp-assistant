@@ -23,6 +23,9 @@ import { NarrativeStreamingService } from '@/services/narrative-streaming-servic
 import { workflowOrchestrator, WorkflowStep, WorkflowContext, ProgressEvent } from '@/services/workflow-orchestrator';
 import { schemaDiscoveryService } from '@/services/schema-discovery';
 import { ResultPresenter, PresentationConfig } from '@/services/result-presenter';
+import { automaticReportGenerator } from '@/services/automatic-report-generation';
+import { ChatReportRenderer } from '@/services/automatic-report-generation/chat-report-renderer';
+import { trimConversationHistory, getContextStats } from '@/utils/context-manager';
 
 const config = loadConfig();
 
@@ -32,6 +35,9 @@ if (isOracleConfigured(config)) {
   conversationStore = new ConversationStore(config.oracle);
 }
 
+// Per-conversation cache of last query data for visualization requests
+const conversationDataCache = new Map<string, Record<string, unknown>[]>();
+
 interface ChatRequestBody {
   messages: Message[];
   modelId: string;
@@ -40,29 +46,136 @@ interface ChatRequestBody {
 }
 
 /**
- * Extract data from SQL tool result (CSV format).
+ * Extract data from SQL tool result.
+ * Handles multiple formats: JSON array, JSON with rows/data key, CSV text.
  */
 function extractDataFromToolResult(result: unknown): Record<string, unknown>[] | null {
   if (!result || typeof result !== 'object') return null;
-  const resultObj = result as { content?: Array<{ text?: string }> };
+  
+  // Unwrap nested { success: true, result: ... } wrapper from DatabaseOrchestrator
+  const maybeWrapped = result as { success?: boolean; result?: unknown };
+  if (maybeWrapped.success !== undefined && maybeWrapped.result !== undefined) {
+    result = maybeWrapped.result;
+  }
+  
+  const resultObj = result as { content?: Array<{ text?: string; type?: string }> };
+  
+  // Log the raw result structure for debugging
+  console.log('[extractDataFromToolResult] Result type:', typeof result);
+  console.log('[extractDataFromToolResult] Content length:', resultObj.content?.length);
+  if (resultObj.content?.[0]) {
+    const preview = JSON.stringify(resultObj.content[0]).slice(0, 500);
+    console.log('[extractDataFromToolResult] Content[0] preview:', preview);
+  }
+
   if (!resultObj.content?.[0]?.text) return null;
 
   try {
-    const text = resultObj.content[0].text;
-    const lines = text.trim().split('\n');
+    const text = resultObj.content[0].text.trim();
+    
+    // Try JSON parse first (SQLcl MCP often returns JSON)
+    if (text.startsWith('[') || text.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(text);
+        
+        // Direct array of objects
+        if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
+          console.log('[extractDataFromToolResult] Parsed JSON array, rows:', parsed.length);
+          return parsed as Record<string, unknown>[];
+        }
+        
+        // Object with rows/data/results/items key
+        if (typeof parsed === 'object' && parsed !== null) {
+          // SQLcl columnar: { columns: [...], rows: [[...], [...]] } — check FIRST
+          // before the generic "rows" key check, since rows here is array-of-arrays not array-of-objects
+          if (
+            Array.isArray((parsed as Record<string, unknown>).columns) &&
+            Array.isArray((parsed as Record<string, unknown>).rows)
+          ) {
+            const cols = (parsed as { columns: string[]; rows: unknown[][] }).columns;
+            const rows = (parsed as { columns: string[]; rows: unknown[][] }).rows;
+            // Only treat as columnar if rows are arrays (not objects)
+            if (rows.length === 0 || Array.isArray(rows[0])) {
+              console.log('[extractDataFromToolResult] Parsed SQLcl columnar format, rows:', rows.length);
+              return rows.map(row => {
+                const obj: Record<string, unknown> = {};
+                cols.forEach((col, i) => {
+                  const val = row[i];
+                  obj[col] = typeof val === 'string' ? (isNaN(parseFloat(val)) || /^\d{4}-\d{2}/.test(val) ? val : parseFloat(val)) : val;
+                });
+                return obj;
+              });
+            }
+          }
+
+          const dataKey = ['rows', 'data', 'results', 'items', 'records'].find(k => Array.isArray((parsed as Record<string, unknown>)[k]));
+          if (dataKey) {
+            const rows = (parsed as Record<string, unknown[]>)[dataKey];
+            console.log('[extractDataFromToolResult] Parsed JSON object.', dataKey, ', rows:', rows.length);
+            return rows as Record<string, unknown>[];
+          }
+        }
+      } catch {
+        // Not valid JSON, fall through to CSV parsing
+      }
+    }
+
+    // CSV parsing fallback
+    const lines = text.split('\n').filter(l => l.trim());
     if (lines.length < 2) return null;
 
     const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
-    return lines.slice(1).map(line => {
-      const values = line.split(',').map(v => v.replace(/"/g, '').trim());
+    const data = lines.slice(1).map(line => {
+      // Handle quoted CSV values properly
+      const values = line.match(/(".*?"|[^,]+)(?=,|$)/g)?.map(v => v.replace(/^"|"$/g, '').trim()) || line.split(',').map(v => v.replace(/"/g, '').trim());
       const row: Record<string, unknown> = {};
       headers.forEach((header, i) => {
-        const value = values[i];
+        const value = values[i] ?? '';
         const numValue = parseFloat(value);
-        row[header] = isNaN(numValue) ? value : numValue;
+        // Keep as string if: not a number, or looks like a date (YYYY-MM-DD, DD/MM/YYYY, etc.)
+        const isDateLike = /^\d{4}-\d{2}|\d{2}\/\d{2}\/\d{4}/.test(value);
+        row[header] = (isNaN(numValue) || isDateLike) ? value : numValue;
       });
       return row;
     });
+    
+    console.log('[extractDataFromToolResult] Parsed CSV, rows:', data.length);
+    return data;
+  } catch (e) {
+    console.error('[extractDataFromToolResult] Parse error:', e);
+    return null;
+  }
+}
+
+/**
+ * Extract tabular data from a markdown table in text.
+ * Handles | col1 | col2 | format.
+ */
+function extractDataFromMarkdownTable(text: string): Record<string, unknown>[] | null {
+  try {
+    const lines = text.split('\n').filter(l => l.trim().startsWith('|'));
+    if (lines.length < 3) return null; // Need header + separator + at least 1 row
+    
+    // Parse header
+    const headers = lines[0].split('|').map(h => h.trim()).filter(h => h.length > 0);
+    if (headers.length === 0) return null;
+    
+    // Skip separator line (---|---|---)
+    const dataLines = lines.slice(2);
+    if (dataLines.length === 0) return null;
+    
+    const data = dataLines.map(line => {
+      const values = line.split('|').map(v => v.trim()).filter((v, i) => i > 0 && i <= headers.length);
+      const row: Record<string, unknown> = {};
+      headers.forEach((header, i) => {
+        const value = values[i] ?? '';
+        const numValue = parseFloat(value.replace(/,/g, ''));
+        row[header] = isNaN(numValue) ? value : numValue;
+      });
+      return row;
+    }).filter(row => Object.values(row).some(v => v !== ''));
+    
+    return data.length > 0 ? data : null;
   } catch {
     return null;
   }
@@ -149,52 +262,22 @@ function detectMultiModalContent(data: Record<string, unknown>[]): {
 /**
  * Convert Message array to ChatMessage array for OCI provider.
  * Filters out messages with empty content to avoid API errors.
- * Adds instruction prefix to guide database interaction workflow.
  */
 function toChatMessages(messages: Message[]): ChatMessage[] {
-  const filtered = messages
-    .filter((m) => m.role === 'user' || m.role === 'system' || m.role === 'tool' || (m.role === 'assistant' && (m.content?.trim() || m.toolCalls?.length)));
-  
-  // Find the last user message and add instruction prefix
-  const result: ChatMessage[] = [];
-  let foundLastUser = false;
-  
-  // Process in reverse to find last user message
-  for (let i = filtered.length - 1; i >= 0; i--) {
-    const m = filtered[i];
-    if (m.role === 'user' && !foundLastUser) {
-      foundLastUser = true;
-      // Add instruction prefix for database workflow
-      const prefix = `[IMPORTANT DATABASE WORKFLOW:
-1. FIRST: List available databases using sqlcl_list_connections
-2. THEN: Show the list to the user and ask which database they want to use
-3. ONLY connect when user specifies the database name
-4. Do NOT automatically connect to any database without user confirmation
-
-Exception: If the user explicitly mentions a database name in their query, you can connect directly to that database.]\n\n`;
-      result.unshift({
-        role: m.role,
-        content: prefix + (m.content || ''),
-        toolCalls: m.toolCalls,
-        toolCallId: m.toolCallId,
-      });
-    } else {
-      result.unshift({
-        role: m.role,
-        content: m.content || '',
-        toolCalls: m.toolCalls,
-        toolCallId: m.toolCallId,
-      });
-    }
-  }
-  
-  return result;
+  return messages
+    .filter((m) => m.role === 'user' || m.role === 'system' || m.role === 'tool' || (m.role === 'assistant' && (m.content?.trim() || m.toolCalls?.length)))
+    .map((m) => ({
+      role: m.role,
+      content: m.content || '',
+      toolCalls: m.toolCalls,
+      toolCallId: m.toolCallId,
+    }));
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: ChatRequestBody = await request.json();
-    const { messages, modelId, conversationId, selectedDatabase } = body;
+    let { messages, modelId, conversationId, selectedDatabase } = body;
 
     console.log(`[chat/POST] Received request: ${messages?.length} messages, model: ${modelId}, conversationId: ${conversationId}, database: ${selectedDatabase || 'none'}`);
 
@@ -213,6 +296,17 @@ export async function POST(request: NextRequest) {
         JSON.stringify(formatErrorResponse(new Error('Model ID required'))),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Trim conversation history to prevent context overflow
+    const contextStats = getContextStats(messages, modelId);
+    console.log(`[chat/POST] Context usage: ${contextStats.totalTokens}/${contextStats.maxTokens} tokens (${contextStats.usagePercent.toFixed(1)}%)`);
+    
+    if (contextStats.usagePercent > 80) {
+      console.log(`[chat/POST] Context usage high, trimming conversation history...`);
+      messages = trimConversationHistory(messages, modelId);
+      const newStats = getContextStats(messages, modelId);
+      console.log(`[chat/POST] After trimming: ${newStats.totalTokens}/${newStats.maxTokens} tokens (${newStats.usagePercent.toFixed(1)}%)`);
     }
 
     // Check for OCI provider initialization errors
@@ -327,9 +421,9 @@ export async function POST(request: NextRequest) {
     // Check if clarification is needed - in autonomous mode, almost never
     const clarificationPrompt = generateClarificationPrompt(userIntent);
 
-    // Check if user is requesting a visualization
-    const isVisualizationRequest = userIntent.visualizationType &&
-      userIntent.visualizationType !== 'custom';
+    // Check if user is requesting a visualization (any viz type, including custom/dashboard)
+    const isVisualizationRequest = !!(userIntent.visualizationType) ||
+      lastUserMessage.match(/\b(visual|chart|graph|dashboard|plot|report|html)\b/) !== null;
 
     // Create streaming response
     const encoder = new TextEncoder();
@@ -506,6 +600,24 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
 
     // AUTONOMOUS MODE: Always use database agent instructions for autonomous operation
     let systemInstructions = DATABASE_AGENT_INSTRUCTIONS;
+
+    // Auto-detect database name from user message if not explicitly provided
+    if (!selectedDatabase) {
+      const dbPatterns = [
+        /\b(BASE_DB_\w+)\b/i,
+        /\b(LIVELAB\w*)\b/i,
+        /\b(CLAUDE_MCP\w*)\b/i,
+        /(?:connect\s+to|use|using)\s+([A-Za-z][A-Za-z0-9_]+)/i,
+      ];
+      for (const pattern of dbPatterns) {
+        const match = lastUserMessageOriginal.match(pattern);
+        if (match) {
+          selectedDatabase = match[1];
+          console.log(`[chat/POST] Auto-detected database from message: ${selectedDatabase}`);
+          break;
+        }
+      }
+    }
     
     // Inject active connection context if database is selected
     if (selectedDatabase) {
@@ -516,7 +628,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
       
       systemInstructions += `\n\nCURRENT CONTEXT:\n- User has selected database: ${selectedDatabase}\n- Connect to this database using sqlcl_connect tool with connection_name="${selectedDatabase}"\n- After connecting, proceed with the user's query\n- Do NOT list connections or ask which database to use`;
     } else if (agentState?.activeConnection) {
-      systemInstructions += `\n\nCURRENT CONTEXT:\n- User has selected database: ${agentState.activeConnection}\n- Connect to this database using sqlcl_connect tool with connection_name="${agentState.activeConnection}"\n- After connecting, proceed with the user's query\n- Do NOT list connections or ask which database to use`;
+      systemInstructions += `\n\nCURRENT CONTEXT:\n- Active database connection: ${agentState.activeConnection}\n- Connect to this database using sqlcl_connect tool with connection_name="${agentState.activeConnection}"\n- After connecting, proceed with the user's query\n- Do NOT list connections or ask which database to use`;
     }
 
     // Create narrative streaming service
@@ -547,31 +659,52 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
         console.log('[chat/POST] Sent initial ping');
 
         // Check if there's recent data in conversation that we can visualize
-        // Look for CSV-like data in previous assistant messages
-        let existingData: Record<string, unknown>[] | null = null;
-        for (const msg of messages) {
-          if (msg.role === 'assistant' && msg.content) {
-            // Look for CSV data patterns in the content
-            const csvMatch = msg.content.match(/"[^"]+",.*\n(?:[^"]*,.*\n?)+/);
-            if (csvMatch) {
-              const data = extractDataFromToolResult({ content: [{ text: csvMatch[0] }] });
-              if (data && data.length > 0) {
-                existingData = data;
+        // First check the per-conversation cache (populated when tool results come in)
+        const cacheKey = conversationId || 'default';
+        let existingData: Record<string, unknown>[] | null = conversationDataCache.get(cacheKey) || null;
+        console.log(`[chat/POST] Cache lookup for key "${cacheKey}": ${existingData ? existingData.length + ' rows' : 'null'}`);
+        
+        // Also try to extract from tool results in message history
+        if (!existingData) {
+          for (const msg of [...messages].reverse()) {
+            if (msg.role === 'tool' && msg.content) {
+              const parsed = extractDataFromToolResult({ content: [{ text: msg.content }] });
+              if (parsed && parsed.length > 0) {
+                existingData = parsed;
+                console.log(`[chat/POST] Extracted ${parsed.length} rows from message history`);
+                break;
+              }
+            }
+          }
+        }
+        
+        // Last resort: extract from markdown table in previous assistant messages
+        if (!existingData) {
+          for (const msg of [...messages].reverse()) {
+            if (msg.role === 'assistant' && msg.content) {
+              const tableData = extractDataFromMarkdownTable(msg.content);
+              if (tableData && tableData.length > 0) {
+                existingData = tableData;
+                console.log(`[chat/POST] Extracted ${tableData.length} rows from markdown table`);
+                break;
               }
             }
           }
         }
 
-        // If user wants visualization and we have existing data, generate it directly
-        if (isVisualizationRequest && existingData && userIntent.visualizationType) {
-          let vizType: 'bar' | 'line' | 'pie' | 'html' = 'html';
+        // If user wants visualization and we have existing data, generate it directly (bypass AI)
+        if (isVisualizationRequest && existingData && existingData.length > 0) {
+          let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
           let vizTitle = 'Data Visualization';
 
           switch (userIntent.visualizationType) {
             case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
             case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
             case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
-            case 'dashboard': vizType = 'html'; vizTitle = 'Interactive Dashboard'; break;
+            case 'dashboard':
+            case 'custom':
+              vizType = 'html'; vizTitle = 'Interactive Dashboard'; break;
+            default: vizType = 'auto'; vizTitle = 'Data Visualization'; break;
           }
 
           try {
@@ -582,18 +715,21 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
             });
 
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: `Here's your ${vizTitle}:` })}\n\n`));
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({
-              visualization: {
-                type: viz.type,
-                html: viz.content,
-                title: vizTitle,
-              }
-            })}\n\n`));
+            
+            const visualizationData: Record<string, unknown> = { type: viz.type, title: vizTitle };
+            if (typeof viz.content === 'string') {
+              visualizationData.html = viz.content;
+            } else if (typeof viz.content === 'object' && viz.content !== null) {
+              Object.assign(visualizationData, viz.content);
+            }
+            
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
             controller.close();
             return;
           } catch (vizError) {
             console.error('[chat/POST] Direct visualization error:', vizError);
+            // Fall through to agent
           }
         }
 
@@ -729,7 +865,10 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
               case 'tool_result':
                 // Tool result event with post-tool narrative already streamed
                 if (event.result) {
-                  allToolResults.push(event.result);
+                  allToolResults.push({
+                    toolCallId: event.result.toolCallId,
+                    result: event.result.content
+                  });
                   
                   // Find corresponding tool call
                   const toolCall = allToolCalls.find(
@@ -767,123 +906,48 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
 
                   // Auto-generate visualization for SQL results
                   const data = extractDataFromToolResult(event.result.content);
+                  console.log(`[chat/POST] extractDataFromToolResult result: ${data ? data.length + ' rows, cols: ' + Object.keys(data[0] || {}).join(',') : 'null'}`);
                   if (data && data.length > 0) {
                     lastQueryData = data;
+                    // Cache data per conversation for visualization requests
+                    conversationDataCache.set(conversationId || 'default', data);
+                    console.log(`[chat/POST] Cached ${data.length} rows for conversation ${conversationId || 'default'}`);
                     
-                    // Detect multi-modal content (Requirement 8.1, 8.2)
-                    const multiModalInfo = detectMultiModalContent(data);
-                    
-                    // If result contains images or multi-modal metrics, format with ResultPresenter
-                    // Requirement 8.1: Handle image embedding in results
-                    // Requirement 8.2: Format similarity scores, view counts, distances
-                    // Requirement 8.6, 8.7: Route to artifacts panel or inline
-                    if (multiModalInfo.hasImages || multiModalInfo.hasSimilarityScores) {
-                      try {
-                        const resultPresenter = new ResultPresenter();
-                        
-                        // Configure presentation based on detected columns
-                        const presentationConfig: PresentationConfig = {
-                          imageColumns: multiModalInfo.imageColumns,
-                          similarityColumn: multiModalInfo.similarityColumn,
-                          viewCountColumn: multiModalInfo.viewCountColumn,
-                          distanceColumn: multiModalInfo.distanceColumn,
-                          distanceUnit: multiModalInfo.distanceColumn?.includes('km') ? 'km' : 'miles',
-                          preserveAspectRatio: true,
-                          maxImageWidth: 400,
-                          maxImageHeight: 400,
-                        };
-                        
-                        // Format results with ResultPresenter
-                        const formattedResult = resultPresenter.formatResults(
-                          { data, columns: Object.keys(data[0] || {}) },
-                          presentationConfig
-                        );
-                        
-                        // Generate HTML for display
-                        const layout = formattedResult.type === 'gallery' ? 'grid' : 'list';
-                        const html = resultPresenter.generateHTML(formattedResult, layout);
-                        
-                        // Emit as visualization that routes to artifacts panel
-                        // Requirement 8.6: Route large results to artifacts panel
-                        controller.enqueue(
-                          encoder.encode(
-                            `data: ${JSON.stringify({
-                              visualization: {
-                                type: formattedResult.type === 'grouped_gallery' ? 'grouped_gallery' : 'gallery',
-                                html,
-                                title: 'Multi-Modal Query Results',
-                                metadata: formattedResult.metadata,
-                              }
-                            })}\n\n`
-                          )
-                        );
-                        
-                        console.log(`[chat/POST] Formatted multi-modal result with ${formattedResult.metadata.totalRows} rows`);
-                      } catch (presenterError) {
-                        console.error('[chat/POST] ResultPresenter error:', presenterError);
-                        // Fall through to standard visualization
-                      }
-                    }
-                    
+                    // Generate visualization directly — skip the complex report pipeline
                     try {
-                      // Generate analysis
                       const analysis = analyzeData({ data, query: 'SQL query' });
-                      controller.enqueue(
-                        encoder.encode(
-                          `data: ${JSON.stringify({ analysis })}\n\n`
-                        )
-                      );
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ analysis })}\n\n`));
 
-                      // Check if visualization was requested
-                      const isVisualizationRequested = userIntent.visualizationType || 
-                        lastUserMessageOriginal.toLowerCase().match(/\b(visuali[sz]e|chart|graph|plot|dashboard|show.*visual|create.*visual)\b/);
-                      
-                      if (isVisualizationRequested && !multiModalInfo.hasImages) {
-                        let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' | 'map' | 'timeline' | 'photo_gallery' = 'auto';
-                        let vizTitle = 'Data Visualization';
-
-                        if (userIntent.visualizationType) {
-                          switch (userIntent.visualizationType) {
-                            case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
-                            case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
-                            case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
-                            case 'map': vizType = 'map'; vizTitle = 'Map'; break;
-                            case 'timeline': vizType = 'timeline'; vizTitle = 'Timeline'; break;
-                            case 'dashboard':
-                            case 'table':
-                              vizType = 'html';
-                              vizTitle = 'Interactive Dashboard';
-                              break;
-                          }
+                      let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
+                      let vizTitle = 'Query Results';
+                      if (userIntent.visualizationType) {
+                        switch (userIntent.visualizationType) {
+                          case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
+                          case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
+                          case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
+                          case 'dashboard': vizType = 'html'; vizTitle = 'Dashboard'; break;
                         }
-
-                        // Extract title from user message if provided
-                        const titleMatch = lastUserMessageOriginal.match(/(?:titled?|called?|named?)\s+["']?([^"']+)["']?/i);
-                        if (titleMatch) {
-                          vizTitle = titleMatch[1];
-                        }
-
-                        // Generate visualization
-                        const viz = await generateVisualization({
-                          data,
-                          type: vizType,
-                          title: vizTitle,
-                        });
-                        controller.enqueue(
-                          encoder.encode(
-                            `data: ${JSON.stringify({
-                              visualization: {
-                                type: viz.type,
-                                html: viz.content,
-                                title: vizTitle,
-                              }
-                            })}\n\n`
-                          )
-                        );
-                        console.log(`[chat/POST] Generated ${viz.type} visualization as requested`);
                       }
+                      // If user asked for dashboard, use html type
+                      if (lastUserMessage.includes('dashboard')) {
+                        vizType = 'html';
+                        vizTitle = 'Sales Dashboard';
+                      }
+
+                      const viz = await generateVisualization({ data, type: vizType, title: vizTitle });
+                      console.log(`[chat/POST] Generated ${viz.type} visualization, content type: ${typeof viz.content}`);
+
+                      const visualizationData: Record<string, unknown> = { type: viz.type, title: vizTitle };
+                      if (typeof viz.content === 'string') {
+                        visualizationData.html = viz.content;
+                      } else if (typeof viz.content === 'object' && viz.content !== null) {
+                        Object.assign(visualizationData, viz.content);
+                      }
+
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
+                      console.log(`[chat/POST] Sent visualization SSE event`);
                     } catch (vizError) {
-                      console.error('[chat/POST] Analysis error:', vizError);
+                      console.error('[chat/POST] Visualization error:', vizError);
                     }
                   }
                   
@@ -951,6 +1015,30 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                       })}\n\n`
                     )
                   );
+                }
+                
+                // Post-processing: if AI refused to generate visualization but we have cached data, generate it now
+                {
+                  const refusalPhrases = ['cannot directly generate', 'cannot create visual', 'cannot generate html', 'i cannot create', 'unable to generate', 'not able to generate', 'cannot design'];
+                  const aiRefused = refusalPhrases.some(p => fullResponse.toLowerCase().includes(p));
+                  const cachedData = conversationDataCache.get(conversationId || 'default');
+                  
+                  if (aiRefused && cachedData && cachedData.length > 0 && isVisualizationRequest) {
+                    console.log('[chat/POST] AI refused visualization but we have cached data - generating directly');
+                    try {
+                      const viz = await generateVisualization({ data: cachedData, type: 'auto', title: 'Data Visualization' });
+                      const visualizationData: Record<string, unknown> = { type: viz.type, title: 'Data Visualization' };
+                      if (typeof viz.content === 'string') {
+                        visualizationData.html = viz.content;
+                      } else if (typeof viz.content === 'object' && viz.content !== null) {
+                        Object.assign(visualizationData, viz.content);
+                      }
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
+                      console.log('[chat/POST] Sent override visualization after AI refusal');
+                    } catch (e) {
+                      console.error('[chat/POST] Override visualization error:', e);
+                    }
+                  }
                 }
                 
                 controller.enqueue(

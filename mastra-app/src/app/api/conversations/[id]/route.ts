@@ -92,6 +92,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       'conversations/[id]/GET/messages'
     );
 
+    console.log('[API] Conversation ID:', id);
+    console.log('[API] Messages retrieved:', messages.length);
+    console.log('[API] Messages:', JSON.stringify(messages, null, 2));
+
     return NextResponse.json({
       ...conversation,
       messages,

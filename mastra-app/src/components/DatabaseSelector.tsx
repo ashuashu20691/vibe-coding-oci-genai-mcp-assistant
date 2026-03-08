@@ -107,6 +107,19 @@ export function DatabaseSelector({ value, onChange }: Props) {
     }
   };
 
+  // Get status indicator CSS class
+  const getStatusClass = (status: 'connected' | 'available' | 'error') => {
+    switch (status) {
+      case 'connected':
+        return 'status-connected';
+      case 'error':
+        return 'status-error';
+      case 'available':
+      default:
+        return 'status-available';
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="database-selector-container">
@@ -125,13 +138,30 @@ export function DatabaseSelector({ value, onChange }: Props) {
   return (
     <div className="database-selector-container" ref={dropdownRef}>
       {/* Label */}
-      <label className="selector-label">Database</label>
+      <label id="database-selector-label" className="selector-label">Database</label>
       
       {/* Selected database button */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
+        onKeyDown={(e) => {
+          // Support Space and Enter keys for activation - Requirement 27.4
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            setIsOpen(!isOpen);
+          }
+          // Support Escape key to close dropdown
+          if (e.key === 'Escape' && isOpen) {
+            e.preventDefault();
+            setIsOpen(false);
+          }
+        }}
         className="database-selector"
+        tabIndex={0} // Ensure proper tab navigation - Requirement 27.3
+        aria-labelledby="database-selector-label"
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
+        aria-label="Select database connection"
         style={{
           borderColor: isOpen ? '#3B82F6' : '#D1D5DB',
           boxShadow: isOpen ? '0 0 0 3px rgba(59, 130, 246, 0.1)' : '0 1px 2px rgba(0, 0, 0, 0.05)',
@@ -139,8 +169,7 @@ export function DatabaseSelector({ value, onChange }: Props) {
       >
         {/* Connection status dot */}
         <span 
-          className="status-dot"
-          style={{ backgroundColor: currentStatus.color }}
+          className={`status-dot ${getStatusClass(connectionStatus)}`}
           title={currentStatus.label}
         />
         
@@ -198,7 +227,15 @@ export function DatabaseSelector({ value, onChange }: Props) {
                     key={connection.name}
                     type="button"
                     onClick={() => handleSelect(connection.name)}
+                    onKeyDown={(e) => {
+                      // Support Space and Enter keys for activation - Requirement 27.4
+                      if (e.key === ' ' || e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSelect(connection.name);
+                      }
+                    }}
                     className="database-dropdown-item"
+                    tabIndex={0} // Ensure proper tab navigation - Requirement 27.3
                     style={{ 
                       backgroundColor: isSelected ? '#EFF6FF' : 'transparent',
                       fontWeight: isSelected ? 500 : 400,
@@ -216,8 +253,7 @@ export function DatabaseSelector({ value, onChange }: Props) {
                   >
                     {/* Status dot */}
                     <span 
-                      className="status-dot"
-                      style={{ backgroundColor: statusInfo.color }}
+                      className={`status-dot ${getStatusClass(itemStatus)}`}
                       title={statusInfo.label}
                     />
                     
@@ -288,14 +324,6 @@ export function DatabaseSelector({ value, onChange }: Props) {
           box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
-        .status-dot {
-          display: inline-block;
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
-
         .database-selector-text {
           flex: 1;
           text-align: left;
@@ -328,7 +356,7 @@ export function DatabaseSelector({ value, onChange }: Props) {
           border: 1px solid #D1D5DB;
           border-radius: 6px;
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-          z-index: 100;
+          z-index: var(--z-index-dropdown);
           overflow: hidden;
         }
 

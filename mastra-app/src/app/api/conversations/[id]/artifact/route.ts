@@ -19,10 +19,10 @@ if (isOracleConfigured(config)) {
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const conversationId = params.id;
+    const { id: conversationId } = await params;
 
     if (!conversationId) {
       return NextResponse.json(
@@ -68,11 +68,11 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { artifact } = await request.json();
-    const conversationId = params.id;
+    const { id: conversationId } = await params;
 
     if (!conversationId) {
       return NextResponse.json(

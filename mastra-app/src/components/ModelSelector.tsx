@@ -127,6 +127,9 @@ export function ModelSelector({ value, onChange, defaultModel }: Props) {
           color: 'var(--text-primary)', 
           border: '1px solid var(--border-color)' 
         }}
+        aria-expanded={isOpen}
+        aria-haspopup="true"
+        aria-label="Select AI model"
       >
         {selectedProvider && (
           <span className="text-base" title={selectedProvider.name}>{selectedProvider.icon}</span>

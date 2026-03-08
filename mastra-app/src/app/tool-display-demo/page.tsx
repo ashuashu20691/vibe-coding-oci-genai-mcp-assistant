@@ -24,7 +24,6 @@ export default function ToolDisplayDemoPage() {
         arguments: {
           connection_name: 'BASE_DB_23AI',
         },
-        status: 'completed',
       },
       status: 'completed',
     },
@@ -37,7 +36,7 @@ export default function ToolDisplayDemoPage() {
           query: 'SELECT * FROM suppliers ORDER BY on_time_delivery_rate DESC',
         },
       },
-      status: 'completed',
+      status: 'executing',
     },
     {
       toolCall: {
@@ -47,7 +46,18 @@ export default function ToolDisplayDemoPage() {
           table_name: 'SUPPLIERS',
         },
       },
-      status: 'executing',
+      status: 'pending',
+    },
+    {
+      toolCall: {
+        id: 'tool-5',
+        name: 'sqlcl_execute_query',
+        arguments: {
+          connection_name: 'INVALID_DB',
+          query: 'SELECT * FROM nonexistent_table',
+        },
+      },
+      status: 'failed',
     },
   ];
 

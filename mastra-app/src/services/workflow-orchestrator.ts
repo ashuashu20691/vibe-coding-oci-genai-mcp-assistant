@@ -23,6 +23,7 @@ export type StepType =
   | 'connect_database'
   | 'list_tables'
   | 'describe_table'
+  | 'generate_report'
   | 'custom';
 
 /**
@@ -158,11 +159,15 @@ export class WorkflowOrchestrator {
   createExecutionPlan(steps: WorkflowStep[], context: WorkflowContext = {}): ExecutionPlan {
     const planId = this.generatePlanId();
     
+    // Automatically inject report generation steps after query execution
+    // Validates: Requirements 6.1, 6.2
+    const stepsWithReports = this.injectReportGenerationSteps(steps);
+    
     // Validate dependencies
-    this.validateDependencies(steps);
+    this.validateDependencies(stepsWithReports);
     
     // Sort steps by dependencies (topological sort)
-    const sortedSteps = this.topologicalSort(steps);
+    const sortedSteps = this.topologicalSort(stepsWithReports);
     
     // Handle database change - invalidate schema cache if database changed
     // Requirement 5.5: Update schema cache on database change
@@ -185,6 +190,37 @@ export class WorkflowOrchestrator {
     
     this.activePlans.set(planId, plan);
     return plan;
+  }
+  /**
+   * Automatically inject report generation steps after query execution steps
+   * Validates: Requirements 6.1, 6.2
+   *
+   * @param steps - Array of workflow steps
+   * @returns Steps with report generation steps injected
+   */
+  private injectReportGenerationSteps(steps: WorkflowStep[]): WorkflowStep[] {
+    const newSteps: WorkflowStep[] = [];
+
+    for (const step of steps) {
+      newSteps.push(step);
+
+      // After each execute_query step, add a generate_report step
+      if (step.type === 'execute_query') {
+        const reportStep: WorkflowStep = {
+          id: `${step.id}_report`,
+          type: 'generate_report',
+          description: `Generate visual report for ${step.description}`,
+          parameters: {
+            queryStepId: step.id,
+          },
+          dependencies: [step.id], // Depends on the query step
+          status: 'pending',
+        };
+        newSteps.push(reportStep);
+      }
+    }
+
+    return newSteps;
   }
 
   /**
@@ -565,6 +601,18 @@ export class WorkflowOrchestrator {
           const analysisInsights = (result as { insights?: string[] }).insights;
           if (Array.isArray(analysisInsights)) {
             insights.push(...analysisInsights);
+          }
+        }
+        break;
+        
+      case 'generate_report':
+        // Report generation insights
+        if (typeof result === 'object' && result !== null) {
+          const reportResult = result as { success?: boolean; reportHTML?: string; error?: Error };
+          if (reportResult.success) {
+            insights.push('✓ Visual report generated successfully.');
+          } else if (reportResult.error) {
+            insights.push(`⚠️ Report generation failed: ${reportResult.error.message}`);
           }
         }
         break;

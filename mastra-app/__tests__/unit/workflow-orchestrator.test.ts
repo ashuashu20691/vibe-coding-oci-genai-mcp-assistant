@@ -270,6 +270,19 @@ describe('WorkflowOrchestrator', () => {
     });
 
     it('should generate insights from workflow results', async () => {
+      // Register executors for both execute_query and generate_report
+      orchestrator.registerExecutor('execute_query', async (step) => {
+        const execute = step.parameters.execute as (() => Promise<unknown>) | undefined;
+        if (execute) {
+          return execute();
+        }
+        return [];
+      });
+
+      orchestrator.registerExecutor('generate_report', async () => {
+        return { success: true, reportHTML: '<div>Report</div>' };
+      });
+
       const steps: WorkflowStep[] = [
         {
           id: 'step1',
@@ -404,6 +417,221 @@ describe('WorkflowOrchestrator', () => {
     it('should return undefined for non-existent plan', () => {
       const retrieved = orchestrator.getActivePlan('nonexistent');
       expect(retrieved).toBeUndefined();
+    });
+  });
+
+  describe('automatic report generation', () => {
+    it('should automatically inject report generation step after execute_query step', () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'Execute SQL query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+
+      // Should have 2 steps: original query + auto-generated report
+      expect(plan.steps).toHaveLength(2);
+      expect(plan.steps[0].type).toBe('execute_query');
+      expect(plan.steps[1].type).toBe('generate_report');
+      expect(plan.steps[1].id).toBe('query1_report');
+      expect(plan.steps[1].dependencies).toContain('query1');
+    });
+
+    it('should inject report generation steps for multiple query steps', () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'First query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+        {
+          id: 'query2',
+          type: 'execute_query',
+          description: 'Second query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+
+      // Should have 4 steps: 2 queries + 2 reports
+      expect(plan.steps).toHaveLength(4);
+      
+      // Find report steps
+      const reportSteps = plan.steps.filter(s => s.type === 'generate_report');
+      expect(reportSteps).toHaveLength(2);
+      expect(reportSteps[0].dependencies).toContain('query1');
+      expect(reportSteps[1].dependencies).toContain('query2');
+    });
+
+    it('should not inject report steps for non-query steps', () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'step1',
+          type: 'discover_schema',
+          description: 'Discover schema',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+        {
+          id: 'step2',
+          type: 'visualize',
+          description: 'Visualize data',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+
+      // Should have only the original 2 steps
+      expect(plan.steps).toHaveLength(2);
+      expect(plan.steps.every(s => s.type !== 'generate_report')).toBe(true);
+    });
+
+    it('should properly order report steps with dependencies', () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'First query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+        {
+          id: 'analyze1',
+          type: 'analyze',
+          description: 'Analyze results',
+          parameters: {},
+          dependencies: ['query1'],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+
+      // Should have 3 steps: query1, query1_report, analyze1
+      expect(plan.steps).toHaveLength(3);
+      
+      // Find the positions
+      const query1Index = plan.steps.findIndex(s => s.id === 'query1');
+      const reportIndex = plan.steps.findIndex(s => s.id === 'query1_report');
+      const analyzeIndex = plan.steps.findIndex(s => s.id === 'analyze1');
+      
+      // query1 should come first
+      expect(query1Index).toBe(0);
+      // report should come after query1 but before or after analyze1 (both depend on query1)
+      expect(reportIndex).toBeGreaterThan(query1Index);
+      expect(analyzeIndex).toBeGreaterThan(query1Index);
+    });
+
+    it('should execute report generation step when executor is registered', async () => {
+      let reportExecutorCalled = false;
+      let receivedQueryStepId = '';
+
+      // Register a mock report executor
+      orchestrator.registerExecutor('generate_report', async (step) => {
+        reportExecutorCalled = true;
+        receivedQueryStepId = step.parameters.queryStepId as string;
+        return { success: true, reportHTML: '<div>Report</div>' };
+      });
+
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'Execute query',
+          parameters: {
+            execute: async () => [{ id: 1, name: 'Test' }],
+          },
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+      
+      // Override the execute_query executor to return data
+      orchestrator.registerExecutor('execute_query', async () => {
+        return [{ id: 1, name: 'Test' }];
+      });
+
+      const result = await orchestrator.execute(plan);
+
+      expect(result.success).toBe(true);
+      expect(reportExecutorCalled).toBe(true);
+      expect(receivedQueryStepId).toBe('query1');
+      expect(result.completedSteps).toBe(2); // query + report
+    });
+
+    it('should generate insights for successful report generation', async () => {
+      orchestrator.registerExecutor('generate_report', async () => {
+        return { success: true, reportHTML: '<div>Report</div>' };
+      });
+
+      orchestrator.registerExecutor('execute_query', async () => {
+        return [{ id: 1 }];
+      });
+
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'Execute query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+      const result = await orchestrator.execute(plan);
+
+      // Should have insight about successful report generation
+      expect(result.insights.some(i => i.includes('Visual report generated successfully'))).toBe(true);
+    });
+
+    it('should handle report generation failure gracefully', async () => {
+      orchestrator.registerExecutor('generate_report', async () => {
+        return { success: false, error: new Error('Report generation failed') };
+      });
+
+      orchestrator.registerExecutor('execute_query', async () => {
+        return [{ id: 1 }];
+      });
+
+      const steps: WorkflowStep[] = [
+        {
+          id: 'query1',
+          type: 'execute_query',
+          description: 'Execute query',
+          parameters: {},
+          dependencies: [],
+          status: 'pending',
+        },
+      ];
+
+      const plan = orchestrator.createExecutionPlan(steps, {});
+      const result = await orchestrator.execute(plan);
+
+      // Workflow should still succeed even if report generation fails
+      expect(result.completedSteps).toBe(2);
+      // Should have insight about report generation failure
+      expect(result.insights.some(i => i.includes('Report generation failed'))).toBe(true);
     });
   });
 });

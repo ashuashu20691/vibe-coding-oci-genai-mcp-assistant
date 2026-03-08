@@ -105,7 +105,7 @@ export function TimelineRenderer({
 
     if (!detectedTimeField) {
         return (
-            <div className="p-4 text-center text-gray-500">
+            <div className="timeline-empty">
                 No time field detected in data
             </div>
         );

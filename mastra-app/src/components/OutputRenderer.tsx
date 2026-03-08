@@ -655,7 +655,7 @@ export function OutputRenderer({ data, outputType, title }: OutputRendererProps)
     const tableData = Array.isArray(effectiveData) ? effectiveData : [];
     if (tableData.length === 0) {
       return (
-        <div className="output-empty p-4 text-gray-500 text-center">
+        <div className="output-empty">
           No data to display
         </div>
       );
@@ -668,7 +668,7 @@ export function OutputRenderer({ data, outputType, title }: OutputRendererProps)
     const chartData = Array.isArray(effectiveData) ? effectiveData : [];
     if (chartData.length === 0) {
       return (
-        <div className="output-empty p-4 text-gray-500 text-center">
+        <div className="output-empty">
           No data to display
         </div>
       );
@@ -698,7 +698,7 @@ export function OutputRenderer({ data, outputType, title }: OutputRendererProps)
     const mapData = Array.isArray(effectiveData) ? effectiveData : [];
     if (mapData.length === 0) {
       return (
-        <div className="output-empty p-4 text-gray-500 text-center">
+        <div className="output-empty">
           No data to display
         </div>
       );
@@ -711,8 +711,8 @@ export function OutputRenderer({ data, outputType, title }: OutputRendererProps)
     const galleryData = Array.isArray(effectiveData) ? effectiveData : [];
     if (galleryData.length === 0) {
       return (
-        <div className="output-empty p-4 text-gray-500 text-center">
-          No data to display
+        <div className="photo-gallery-empty">
+          No images to display
         </div>
       );
     }
@@ -724,8 +724,8 @@ export function OutputRenderer({ data, outputType, title }: OutputRendererProps)
     const timeData = Array.isArray(effectiveData) ? effectiveData : [];
     if (timeData.length === 0) {
       return (
-        <div className="output-empty p-4 text-gray-500 text-center">
-          No data to display
+        <div className="timeline-empty">
+          No timeline data to display
         </div>
       );
     }

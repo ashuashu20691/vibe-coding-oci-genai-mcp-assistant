@@ -11,22 +11,23 @@ import type { Message } from '@/types';
 /**
  * Determines if a visualization should be routed to the artifacts panel
  * 
- * Routing rules (Requirements 8.6, 8.7):
- * - Visual outputs (charts, maps, diagrams, galleries) → Always route to artifacts panel (right 40%)
- * - Tables with > MAX_INLINE_ROWS → Route to artifacts panel (right 40%)
- * - Small tables (≤ MAX_INLINE_ROWS) → Display inline in chat (left 60%)
- * - Textual results → Display inline in chat (left 60%)
- * - Image galleries → Always route to artifacts panel (right 40%)
- * - Dashboards with multiple widgets → Always route to artifacts panel (right 40%)
- * 
- * @param visualization - The visualization object from a message
- * @returns true if should route to artifacts panel, false if should display inline
+ * Routing rules:
+ * - HTML-based visualizations (have .html field) → Always inline in chat
+ * - Visual chart types (bar, line, pie, etc.) → Artifacts panel
+ * - Tables with > MAX_INLINE_ROWS → Artifacts panel
+ * - Small tables (≤ MAX_INLINE_ROWS) → Inline in chat
  */
 export function shouldRouteToArtifacts(visualization: Message['visualization']): boolean {
   if (!visualization) return false;
   
-  // Visual outputs always go to artifacts panel (Requirement 8.6, 8.7, 15.2, 18.7)
-  const visualTypes = [
+  // HTML-based visualizations stay inline — they're already rendered HTML
+  // This covers: automatic_report, html, bar_chart with html, custom_dashboard, etc.
+  if (visualization.html) {
+    return false;
+  }
+  
+  // Data-only chart types (no html) go to artifacts panel for rendering
+  const artifactChartTypes = [
     'bar_chart',
     'line_chart', 
     'pie_chart',
@@ -39,21 +40,20 @@ export function shouldRouteToArtifacts(visualization: Message['visualization']):
     'mermaid',
     'custom_dashboard',
     'analysis_dashboard',
-    'gallery', // Added for multi-modal image results
-    'grouped_gallery', // Added for grouped image results
+    'gallery',
+    'grouped_gallery',
   ];
   
-  if (visualTypes.includes(visualization.type)) {
+  if (artifactChartTypes.includes(visualization.type) && !visualization.html) {
     return true;
   }
   
-  // Tables with more than MAX_INLINE_ROWS go to artifacts panel (Requirement 8.6, 15.2)
+  // Tables with more than MAX_INLINE_ROWS go to artifacts panel
   if (visualization.type === 'table' && visualization.data) {
     const rowCount = Array.isArray(visualization.data) ? visualization.data.length : 0;
     return rowCount > MAX_INLINE_ROWS;
   }
   
-  // Everything else stays inline (small tables, textual results) (Requirement 8.7)
   return false;
 }
 

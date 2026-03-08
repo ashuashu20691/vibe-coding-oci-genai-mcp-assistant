@@ -143,12 +143,12 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
   // Handle empty data
   if (!data || !Array.isArray(data) || data.length === 0) {
     return (
-      <div className="chart-empty p-8 text-gray-500 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
+      <div className="chart-empty">
         <svg className="mx-auto h-12 w-12 text-gray-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
         </svg>
         <p className="text-sm font-medium">No data to display</p>
-        <p className="text-xs text-gray-400 mt-1">Add data to see the chart</p>
+        <p className="text-xs mt-1">Add data to see the chart</p>
       </div>
     );
   }
@@ -166,10 +166,10 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
         </p>
         <div className="mt-4 p-3 bg-white rounded border text-left">
           <p className="text-xs text-gray-600">
-            <span className="font-medium">{xColumn}:</span> {String(chartData[0][xColumn])}
+            <span className="font-medium">{xColumn}:</span> {String((chartData[0] as any)[xColumn])}
           </p>
           <p className="text-xs text-gray-600">
-            <span className="font-medium">{yColumn}:</span> {String(chartData[0][yColumn])}
+            <span className="font-medium">{yColumn}:</span> {String((chartData[0] as any)[yColumn])}
           </p>
         </div>
       </div>
@@ -200,7 +200,7 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
             <Legend wrapperStyle={{ paddingTop: '20px' }} />
             <Bar dataKey={yColumn} fill={COLORS[0]} radius={[4, 4, 0, 0]} name={yColumn}>
               {colorColumn && colorValues.length > 0 && chartData.map((entry, index) => {
-                const colorIndex = colorValues.indexOf(String(entry[colorColumn]));
+                const colorIndex = colorValues.indexOf(String((entry as any)[colorColumn]));
                 return (
                   <Cell key={`cell-${index}`} fill={COLORS[colorIndex >= 0 ? colorIndex % COLORS.length : 0]} />
                 );
@@ -335,7 +335,7 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               fill={COLORS[0]}
             >
               {colorColumn && colorValues.length > 0 && chartData.map((entry, index) => {
-                const colorIndex = colorValues.indexOf(String(entry[colorColumn]));
+                const colorIndex = colorValues.indexOf(String((entry as any)[colorColumn]));
                 return (
                   <Cell key={`cell-${index}`} fill={COLORS[colorIndex >= 0 ? colorIndex % COLORS.length : 0]} />
                 );

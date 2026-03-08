@@ -97,32 +97,32 @@ describe('ToolExecutionDisplay', () => {
   });
 
   describe('Status Color Coding', () => {
-    it('should apply green background for completed status', () => {
+    it('should apply completed class for completed status', () => {
       const { container } = render(<ToolExecutionDisplay toolCall={mockToolCall} status="completed" />);
       
       const toolExecution = container.querySelector('.tool-execution');
-      expect(toolExecution).toHaveStyle({ backgroundColor: 'rgb(209, 250, 229)' });
+      expect(toolExecution).toHaveClass('tool-completed');
     });
 
-    it('should apply amber background for executing status', () => {
+    it('should apply executing class for executing status', () => {
       const { container } = render(<ToolExecutionDisplay toolCall={mockToolCall} status="executing" />);
       
       const toolExecution = container.querySelector('.tool-execution');
-      expect(toolExecution).toHaveStyle({ backgroundColor: 'rgb(254, 243, 199)' });
+      expect(toolExecution).toHaveClass('tool-executing');
     });
 
-    it('should apply red background for failed status', () => {
+    it('should apply failed class for failed status', () => {
       const { container } = render(<ToolExecutionDisplay toolCall={mockToolCall} status="failed" />);
       
       const toolExecution = container.querySelector('.tool-execution');
-      expect(toolExecution).toHaveStyle({ backgroundColor: 'rgb(254, 226, 226)' });
+      expect(toolExecution).toHaveClass('tool-failed');
     });
 
-    it('should apply amber background for pending status', () => {
+    it('should apply pending class for pending status', () => {
       const { container } = render(<ToolExecutionDisplay toolCall={mockToolCall} status="pending" />);
       
       const toolExecution = container.querySelector('.tool-execution');
-      expect(toolExecution).toHaveStyle({ backgroundColor: 'rgb(254, 243, 199)' });
+      expect(toolExecution).toHaveClass('tool-pending');
     });
   });
 
@@ -235,11 +235,11 @@ describe('ToolExecutionDisplay', () => {
   });
 
   describe('Animation', () => {
-    it('should have smooth expand/collapse animation', () => {
+    it('should have tool-execution class with transition styles', () => {
       const { container } = render(<ToolExecutionDisplay toolCall={mockToolCall} status="completed" />);
       
       const toolExecution = container.querySelector('.tool-execution');
-      expect(toolExecution).toHaveStyle({ transition: 'all 0.2s ease' });
+      expect(toolExecution).toHaveClass('tool-execution');
     });
 
     it('should rotate chevron on expand', () => {

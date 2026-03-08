@@ -527,20 +527,41 @@ export class ConversationStore {
     const adaptationNarrativesJson = message.adaptationNarratives ? JSON.stringify(message.adaptationNarratives) : null;
 
     try {
-      await executeStatement(
-        `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at)
-         VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, :toolNarratives, :adaptationNarratives, SYSTIMESTAMP)`,
-        {
-          id,
-          conversationId,
-          role: message.role,
-          content: message.content || '',
-          toolCalls: toolCallsJson,
-          toolCallId: message.toolCallId || null,
-          toolNarratives: toolNarrativesJson,
-          adaptationNarratives: adaptationNarrativesJson,
+      // Try with all columns first
+      try {
+        await executeStatement(
+          `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at)
+           VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, :toolNarratives, :adaptationNarratives, SYSTIMESTAMP)`,
+          {
+            id,
+            conversationId,
+            role: message.role,
+            content: message.content || '',
+            toolCalls: toolCallsJson,
+            toolCallId: message.toolCallId || null,
+            toolNarratives: toolNarrativesJson,
+            adaptationNarratives: adaptationNarrativesJson,
+          }
+        );
+      } catch (error) {
+        // Fallback: insert without optional columns if they don't exist
+        if (error instanceof Error && error.message.includes('ORA-00904')) {
+          await executeStatement(
+            `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
+             VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, SYSTIMESTAMP)`,
+            {
+              id,
+              conversationId,
+              role: message.role,
+              content: message.content || '',
+              toolCalls: toolCallsJson,
+              toolCallId: message.toolCallId || null,
+            }
+          );
+        } else {
+          throw error;
         }
-      );
+      }
 
       // Update conversation timestamp
       await executeStatement(
@@ -574,13 +595,30 @@ export class ConversationStore {
     await this.ensureInitialized();
 
     try {
-      const rows = await executeQuery<MessageRow>(
-        `SELECT id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at
-         FROM messages
-         WHERE conversation_id = :conversationId
-         ORDER BY created_at ASC`,
-        { conversationId }
-      );
+      console.log('[getMessages] Querying messages for conversation:', conversationId);
+      // Try with all columns first
+      let rows: MessageRow[];
+      try {
+        rows = await executeQuery<MessageRow>(
+          `SELECT id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at
+           FROM messages
+           WHERE conversation_id = :conversationId
+           ORDER BY created_at ASC`,
+          { conversationId }
+        );
+        console.log('[getMessages] Query with all columns succeeded, rows:', rows.length);
+      } catch (error) {
+        console.log('[getMessages] Query with all columns failed, trying fallback:', error);
+        // Fallback: query without optional columns if they don't exist
+        rows = await executeQuery<MessageRow>(
+          `SELECT id, role, content, tool_calls, tool_call_id, created_at
+           FROM messages
+           WHERE conversation_id = :conversationId
+           ORDER BY created_at ASC`,
+          { conversationId }
+        );
+        console.log('[getMessages] Fallback query succeeded, rows:', rows.length);
+      }
 
       return rows.map(row => {
         let toolCalls = undefined;

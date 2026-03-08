@@ -109,19 +109,19 @@ export function formatErrorMessage(errorMessage: string): string {
 }
 
 /**
- * Get status indicator color based on connection status
+ * Get status indicator CSS class based on connection status
  */
-function getStatusColor(status: MCPConnectionStatus): string {
+function getStatusClass(status: MCPConnectionStatus): string {
   switch (status) {
     case 'connected':
-      return '#22C55E'; // green
+      return 'status-connected';
     case 'connecting':
-      return '#F59E0B'; // amber
+      return 'status-available'; // Use available color for connecting state
     case 'error':
-      return '#EF4444'; // red
+      return 'status-error';
     case 'disconnected':
     default:
-      return '#6B7280'; // gray
+      return 'status-available';
   }
 }
 
@@ -406,7 +406,7 @@ interface ServerItemProps {
 }
 
 function ServerItem({ server, onConnect, onDisconnect, onToggleTools }: ServerItemProps) {
-  const statusColor = getStatusColor(server.status);
+  const statusClass = getStatusClass(server.status);
   const statusLabel = getStatusLabel(server.status);
   const isConnecting = server.status === 'connecting';
   const isConnected = server.status === 'connected';
@@ -423,12 +423,8 @@ function ServerItem({ server, onConnect, onDisconnect, onToggleTools }: ServerIt
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               {/* Status Indicator */}
-              <div
-                className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                style={{
-                  backgroundColor: statusColor,
-                  boxShadow: server.status === 'connected' ? `0 0 6px ${statusColor}` : 'none',
-                }}
+              <span
+                className={`status-dot ${statusClass}`}
                 title={statusLabel}
               />
               <span
@@ -465,7 +461,8 @@ function ServerItem({ server, onConnect, onDisconnect, onToggleTools }: ServerIt
             <div className="flex items-center gap-2 mt-1.5">
               <span
                 className="text-xs"
-                style={{ color: statusColor }}
+                style={{ color: getStatusClass(server.status) === 'status-connected' ? 'var(--color-status-connected)' : 
+                                getStatusClass(server.status) === 'status-error' ? 'var(--color-status-error)' : 'var(--color-status-available)' }}
               >
                 {statusLabel}
               </span>
@@ -488,7 +485,7 @@ function ServerItem({ server, onConnect, onDisconnect, onToggleTools }: ServerIt
               >
                 <div
                   className="text-xs mb-2"
-                  style={{ color: '#EF4444' }}
+                  style={{ color: 'var(--color-status-error)' }}
                   data-testid="connection-error-message"
                 >
                   {formatErrorMessage(server.errorMessage)}
@@ -498,7 +495,7 @@ function ServerItem({ server, onConnect, onDisconnect, onToggleTools }: ServerIt
                   onClick={() => onConnect(server.id)}
                   className="px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5"
                   style={{
-                    background: '#EF4444',
+                    background: 'var(--color-status-error)',
                     color: 'white',
                     border: 'none',
                   }}
@@ -677,11 +674,11 @@ export function formatToolArgs(args: Record<string, unknown> | undefined): strin
 export function getToolStatusColor(status: ToolExecutionStatus | undefined): string {
   switch (status) {
     case 'running':
-      return '#F59E0B'; // amber
+      return 'var(--color-status-warning)'; // amber
     case 'success':
-      return '#22C55E'; // green
+      return 'var(--color-status-success)'; // green
     case 'error':
-      return '#EF4444'; // red
+      return 'var(--color-status-error)'; // red
     case 'idle':
     default:
       return 'var(--text-muted)';
@@ -708,7 +705,7 @@ function ToolItem({ tool }: ToolItemProps) {
       className="rounded p-2"
       style={{ 
         background: 'var(--bg-primary)', 
-        border: `1px solid ${isRunning ? '#F59E0B' : 'var(--border-color)'}`,
+        border: `1px solid ${isRunning ? 'var(--color-status-warning)' : 'var(--border-color)'}`,
         transition: 'border-color 0.2s ease',
       }}
       data-testid="tool-item"
@@ -725,7 +722,7 @@ function ToolItem({ tool }: ToolItemProps) {
             /* Spinning indicator for running status */
             <svg
               className="w-3 h-3 animate-spin"
-              style={{ color: '#F59E0B' }}
+              style={{ color: 'var(--color-status-warning)' }}
               fill="none"
               viewBox="0 0 24 24"
               data-testid="tool-running-indicator"
@@ -749,7 +746,7 @@ function ToolItem({ tool }: ToolItemProps) {
             tool.executionStatus === 'success' ? (
               <svg
                 className="w-3 h-3"
-                style={{ color: '#22C55E' }}
+                style={{ color: 'var(--color-status-success)' }}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -765,7 +762,7 @@ function ToolItem({ tool }: ToolItemProps) {
             ) : (
               <svg
                 className="w-3 h-3"
-                style={{ color: '#EF4444' }}
+                style={{ color: 'var(--color-status-error)' }}
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -812,7 +809,7 @@ function ToolItem({ tool }: ToolItemProps) {
             {isRunning && (
               <span
                 className="text-xs px-1.5 py-0.5 rounded font-medium"
-                style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#F59E0B' }}
+                style={{ background: 'rgba(245, 158, 11, 0.1)', color: 'var(--color-status-warning)' }}
                 data-testid="tool-status-badge"
               >
                 Running
@@ -885,7 +882,7 @@ function ToolItem({ tool }: ToolItemProps) {
               {tool.executionStatus === 'error' && tool.executionResult.errorMessage && (
                 <div
                   className="text-xs p-1.5 rounded"
-                  style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#EF4444' }}
+                  style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--color-status-error)' }}
                   data-testid="tool-error-message"
                 >
                   {tool.executionResult.errorMessage}

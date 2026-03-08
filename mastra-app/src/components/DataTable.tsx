@@ -156,7 +156,7 @@ export function DataTable({ data, pageSize = 10, title, fullscreenEnabled = true
     return String(v);
   };
 
-  if (!data || !Array.isArray(data) || data.length === 0) return <div className="p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>No data</div>;
+  if (!data || !Array.isArray(data) || data.length === 0) return <div className="data-table-empty">No data available</div>;
 
   const tableContent = (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>

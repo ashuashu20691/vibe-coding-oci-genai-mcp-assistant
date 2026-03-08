@@ -34,7 +34,10 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
   // Validates: Requirement 2.5 - Auto-scroll to keep latest streaming content visible
   const scrollToBottom = useCallback((force = false) => {
     if (force || !userScrolled) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // Use requestAnimationFrame to ensure DOM has updated before scrolling
+      requestAnimationFrame(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     }
   }, [userScrolled]);
 
@@ -43,16 +46,22 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    // Consider "at bottom" if within 100px of the bottom
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 100;
+    // Consider "at bottom" if within 150px of the bottom (more forgiving threshold)
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
     setUserScrolled(!isAtBottom);
   }, []);
 
   // Auto-scroll on new messages or streaming content
   // Validates: Requirement 2.5 - Auto-scroll to latest content during streaming
+  // Only scroll when messages actually change, not on every render
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+    // Debounce scroll to avoid excessive scrolling
+    const timeoutId = setTimeout(() => {
+      scrollToBottom();
+    }, 50);
+    
+    return () => clearTimeout(timeoutId);
+  }, [messages.length, scrollToBottom]); // Only depend on message count, not full messages array
 
   // Reset user scroll state when a new message is submitted (loading starts)
   // Validates: Requirement 2.5 - Reset scroll tracking when new message is submitted
@@ -77,18 +86,14 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
     lastMessageCountRef.current = messages.length;
   }, [messages.length, scrollToBottom]);
 
-  // During active streaming, continuously scroll to bottom (unless user scrolled up)
-  // This ensures smooth following of streaming content
+  // During active streaming, scroll to bottom when content changes (unless user scrolled up)
+  // This ensures smooth following of streaming content without excessive scrolling
   useEffect(() => {
     if (isStreaming && !userScrolled) {
-      // Use a small interval to keep scrolling during streaming
-      const intervalId = setInterval(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-
-      return () => clearInterval(intervalId);
+      // Only scroll when streaming, not continuously
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [isStreaming, userScrolled]);
+  }, [isStreaming, userScrolled, messages]);
 
   // Find the last assistant message index to show thinking steps before it
   const lastAssistantIndex = messages?.map((m, i) => m?.role === 'assistant' ? i : -1).filter(i => i >= 0).pop() ?? -1;
@@ -284,101 +289,66 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
     };
   }
 
-  // Assistant messages - Claude Desktop style with left alignment (Requirement 12.1, 12.4)
-  // Parse content to interleave tool calls with their narratives
+  // Assistant messages - Claude Desktop style with left alignment
   const renderContentWithTools = () => {
-    if (!message?.content) return null;
+    const content = message?.content || '';
+    const toolCalls = message?.toolCalls || [];
 
-    // If no tool calls, just render content normally
-    if (!message?.toolCalls || message.toolCalls.length === 0) {
+    // No tool calls — just render text
+    if (toolCalls.length === 0) {
       return (
         <div>
-          {isStreaming ? (
-            <div>
-              <MarkdownRenderer content={message.content} />
-              <StreamingCursor />
-            </div>
-          ) : (
-            <MarkdownRenderer content={message.content} />
-          )}
+          <MarkdownRenderer content={content} />
+          {isStreaming && <StreamingCursor />}
         </div>
       );
     }
 
-    // Split content by tool-related phrases to interleave tools
-    const content = message.content;
-    const toolCalls = message.toolCalls;
+    // Split the content into sentences/lines to interleave with tools in order.
+    // Strategy: split on newlines, insert each tool after the narrative line that
+    // mentions connecting/running/checking — in the order they appear.
+    const lines = content.split('\n').filter(l => l.trim());
     
-    // Filter out tool status text that might be embedded in content
-    // Pattern: ToolNameCompleted, ToolNameFailed, etc.
-    let filteredContent = content;
-    toolCalls.forEach(tool => {
-      if (tool?.name) {
-        // Remove patterns like "ConnectCompleted", "ExecuteQueryCompleted", etc.
-        const toolNameBase = tool.name.replace(/^(sqlcl_|mcp_)/, '').replace(/[-_]/g, '');
-        const statusPattern = new RegExp(`${toolNameBase}(Completed|Failed|Executing|Pending)`, 'gi');
-        filteredContent = filteredContent.replace(statusPattern, '');
-        
-        // Also remove standalone "Completed", "Failed" etc. that might follow tool names
-        filteredContent = filteredContent.replace(/\s*(Completed|Failed|Executing|Pending)\s*/g, ' ');
+    // Keywords that signal a tool was just executed
+    const toolTriggers = [
+      /connecting/i, /connected/i, /running query/i, /checking schema/i,
+      /retrieving/i, /fetching/i, /executing/i, /listing/i, /disconnecting/i,
+    ];
+
+    const segments: Array<{ type: 'text' | 'tool'; value: string | typeof toolCalls[0] }> = [];
+    let toolIdx = 0;
+
+    for (const line of lines) {
+      segments.push({ type: 'text', value: line });
+      // After a trigger line, insert the next pending tool
+      if (toolIdx < toolCalls.length && toolTriggers.some(r => r.test(line))) {
+        segments.push({ type: 'tool', value: toolCalls[toolIdx++] });
       }
-    });
-    
-    // Clean up extra whitespace
-    filteredContent = filteredContent.replace(/\n\n\n+/g, '\n\n').trim();
-    
-    const segments: Array<{ type: 'tool' | 'text'; content: string | typeof toolCalls[0] }> = [];
-    
-    // Simple approach: Show each tool followed by its related content section
-    // Split content into paragraphs
-    const paragraphs = filteredContent.split('\n\n');
-    let toolIndex = 0;
-    
-    for (let i = 0; i < paragraphs.length; i++) {
-      const para = paragraphs[i];
-      
-      // Skip empty paragraphs
-      if (!para.trim()) continue;
-      
-      // Check if this paragraph mentions checking/retrieving/running something
-      // which typically follows a tool execution
-      const isToolNarrative = /^(Let me check|I retrieved|I'm|I'll|I ran|I executed|I connected)/i.test(para.trim());
-      
-      // If we have a tool to show and this looks like a tool narrative, show the tool first
-      if (isToolNarrative && toolIndex < toolCalls.length) {
-        segments.push({ type: 'tool', content: toolCalls[toolIndex] });
-        toolIndex++;
-      }
-      
-      segments.push({ type: 'text', content: para });
     }
-    
-    // Add any remaining tools at the end
-    while (toolIndex < toolCalls.length) {
-      segments.push({ type: 'tool', content: toolCalls[toolIndex] });
-      toolIndex++;
+
+    // Append any remaining tools at the end
+    while (toolIdx < toolCalls.length) {
+      segments.push({ type: 'tool', value: toolCalls[toolIdx++] });
     }
 
     return (
       <div>
-        {segments.map((segment, idx) => {
-          if (segment.type === 'tool') {
-            const toolCall = segment.content as typeof toolCalls[0];
+        {segments.map((seg, i) => {
+          if (seg.type === 'tool') {
+            const tc = seg.value as typeof toolCalls[0];
             return (
-              <div key={`tool-${idx}`} style={{ marginBottom: '12px' }}>
-                <ToolExecutionDisplay
-                  toolCall={toolCall}
-                  status="completed"
-                />
-              </div>
-            );
-          } else {
-            return (
-              <div key={`text-${idx}`} style={{ marginBottom: idx < segments.length - 1 ? '12px' : '0' }}>
-                <MarkdownRenderer content={segment.content as string} />
+              <div key={`tool-${i}`} style={{ margin: '6px 0 10px' }}>
+                <ToolExecutionDisplay toolCall={tc} status="completed" />
               </div>
             );
           }
+          const text = seg.value as string;
+          if (!text.trim()) return null;
+          return (
+            <div key={`text-${i}`} style={{ marginBottom: '4px' }}>
+              <MarkdownRenderer content={text} />
+            </div>
+          );
         })}
         {isStreaming && <StreamingCursor />}
       </div>
@@ -407,9 +377,34 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
             <InlineAnalysisCard analysis={message.analysis} defaultExpanded={false} />
           </div>
         )}
-        {message?.visualization?.html && (
-          <div className="mt-8">
-            <InlineVisualization visualization={message.visualization} />
+        {/* Inline visualizations — always show when present */}
+        {message?.visualization && (
+          <div className="mt-4">
+            {message.visualization.html ? (
+              <InlineVisualization visualization={message.visualization} defaultExpanded={true} />
+            ) : message.visualization.data && Array.isArray(message.visualization.data) && message.visualization.data.length > 0 ? (
+              // Fallback: render as simple table if no HTML
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--bg-secondary)' }}>
+                      {Object.keys(message.visualization.data[0]).map(col => (
+                        <th key={col} style={{ padding: '8px 12px', textAlign: 'left', borderBottom: '1px solid var(--border-subtle)', fontWeight: 600 }}>{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {message.visualization.data.map((row, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        {Object.values(row).map((val, j) => (
+                          <td key={j} style={{ padding: '8px 12px' }}>{String(val)}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
