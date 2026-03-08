@@ -15,7 +15,6 @@ import type { QueryResult } from '../query-engine';
 import type { 
   TriggerDecision, 
   ReportGenerationResult,
-  ReportGenerationPipeline 
 } from './types';
 import type { WorkflowContext } from '../workflow-orchestrator';
 

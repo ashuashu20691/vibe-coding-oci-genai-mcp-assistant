@@ -1,10 +1,8 @@
 /**
- * NarrativeStreamingService - CONCISE MODE
+ * NarrativeStreamingService
  * 
- * Generates SHORT status updates for tool execution.
- * Minimal commentary - let the data speak for itself.
- * 
- * Validates: Requirements 13.1, 13.2, 13.3, 13.6
+ * Generates brief, Claude Desktop-style status text between tool calls.
+ * Shows what the agent is doing and what it found — concise, not verbose.
  */
 
 export interface ConversationContext {
@@ -23,132 +21,170 @@ export interface AttemptRecord {
 
 export class NarrativeStreamingService {
   /**
-   * Stream brief status before tool execution
-   * Validates: Requirement 13.1
+   * Brief status before tool execution — one line explaining what we're about to do
    */
   async *streamPreToolNarrative(
     toolName: string,
     toolArgs: Record<string, unknown>,
-    context: ConversationContext
+    _context: ConversationContext
   ): AsyncGenerator<string> {
-    // Concise mode: no pre-tool narration — let the tool call speak for itself
-    // The UI shows tool call badges; we don't need text commentary too
-    return;
+    const action = this.describeAction(toolName, toolArgs);
+    if (action) {
+      yield `${action}\n\n`;
+    }
   }
 
   /**
-   * Stream minimal commentary after tool execution
-   * Validates: Requirement 13.2
+   * Brief status after tool execution — one line summarizing what we found
    */
   async *streamPostToolNarrative(
     toolName: string,
     toolResult: unknown,
-    context: ConversationContext
+    _context: ConversationContext
   ): AsyncGenerator<string> {
-    // Concise mode: no post-tool narration
-    // The agent's final text response summarizes findings; we don't double-up
-    return;
+    const summary = this.summarizeResult(toolName, toolResult);
+    if (summary) {
+      yield `${summary}\n\n`;
+    }
   }
 
   /**
-   * Stream brief error message
-   * Validates: Requirement 13.3
+   * Error narrative
    */
   async *streamErrorNarrative(
     error: Error,
-    attemptCount: number,
-    nextAction: string
+    _attemptCount: number,
+    _nextAction: string
   ): AsyncGenerator<string> {
     yield `Error: ${error.message}. Trying alternative approach...\n\n`;
   }
 
   /**
-   * Stream transition narrative (disabled in concise mode)
-   * Validates: Requirement 13.6
+   * Transition narrative (unused)
    */
   async *streamTransitionNarrative(
-    fromStep: string,
-    toStep: string,
-    reasoning: string
+    _fromStep: string,
+    _toStep: string,
+    _reasoning: string
   ): AsyncGenerator<string> {
-    // Concise mode: skip transitions
     return;
   }
 
   /**
-   * Format tool name into short action description
+   * Describe what we're about to do — one short sentence
    */
-  private formatToolAction(toolName: string): string {
-    const actionMap: Record<string, string> = {
-      'list_connections': 'Listing databases',
-      'connect': 'Connecting',
-      'run_sql': 'Running query',
-      'run_query': 'Running query',
-      'execute_query': 'Running query',
-      'list_tables': 'Checking tables',
-      'describe_table': 'Checking schema',
-      'get_schema': 'Checking schema',
-      'schema_information': 'Checking schema',
-      'disconnect': 'Disconnecting',
-    };
-    
-    const lowerName = toolName.toLowerCase();
-    
-    if (actionMap[lowerName]) {
-      return actionMap[lowerName];
+  private describeAction(toolName: string, args: Record<string, unknown>): string {
+    const lower = toolName.toLowerCase();
+
+    if (lower.includes('list_connection') || lower.includes('list_db')) {
+      return 'Checking available databases...';
     }
-    
-    for (const [key, value] of Object.entries(actionMap)) {
-      if (lowerName.includes(key)) {
-        return value;
+    if (lower.includes('connect')) {
+      const db = args.connection_name || args.database || '';
+      return db ? `Connecting to ${db}...` : 'Connecting to database...';
+    }
+    if (lower.includes('disconnect')) {
+      return 'Disconnecting...';
+    }
+    if (lower.includes('run_sql') || lower.includes('run_query') || lower.includes('execute')) {
+      const sql = String(args.sql || args.query || '').trim();
+      if (sql) {
+        // Show first 80 chars of the query
+        const preview = sql.length > 80 ? sql.slice(0, 80) + '...' : sql;
+        return `Running query: \`${preview}\``;
       }
+      return 'Running SQL query...';
     }
-    
-    return toolName.charAt(0).toUpperCase() + toolName.slice(1).replace(/_/g, ' ');
+    if (lower.includes('schema') || lower.includes('describe') || lower.includes('list_table')) {
+      return 'Checking database schema...';
+    }
+
+    return '';
   }
 
   /**
-   * Analyze tool result
+   * Summarize what a tool result contains — one short sentence
    */
-  private analyzeResult(result: unknown): {
-    isEmpty: boolean;
-    isError: boolean;
-    isArray: boolean;
-    count: number;
-    hasData: boolean;
-  } {
-    if (result === null || result === undefined) {
-      return { isEmpty: true, isError: false, isArray: false, count: 0, hasData: false };
+  private summarizeResult(toolName: string, result: unknown): string {
+    const lower = toolName.toLowerCase();
+
+    // Extract text content from MCP-style results
+    const text = this.extractText(result);
+
+    if (lower.includes('list_connection') || lower.includes('list_db')) {
+      // Count connections mentioned
+      const lines = text.split('\n').filter(l => l.trim());
+      if (lines.length > 1) {
+        return `Found ${lines.length - 1} database connections.`;
+      }
+      return '';
     }
-    
-    if (Array.isArray(result)) {
-      return {
-        isEmpty: result.length === 0,
-        isError: false,
-        isArray: true,
-        count: result.length,
-        hasData: result.length > 0,
-      };
+
+    if (lower.includes('connect')) {
+      if (text.toLowerCase().includes('success') || text.toLowerCase().includes('connected')) {
+        return 'Connected successfully.';
+      }
+      if (text.toLowerCase().includes('error') || text.toLowerCase().includes('fail')) {
+        return 'Connection failed.';
+      }
+      return '';
     }
-    
-    if (typeof result === 'object') {
-      const keys = Object.keys(result);
-      return {
-        isEmpty: keys.length === 0,
-        isError: 'error' in result || 'message' in result,
-        isArray: false,
-        count: keys.length,
-        hasData: keys.length > 0,
-      };
+
+    if (lower.includes('run_sql') || lower.includes('run_query') || lower.includes('execute')) {
+      // Try to detect row count
+      const rowMatch = text.match(/(\d+)\s*rows?\s*(selected|returned|fetched|affected)/i);
+      if (rowMatch) {
+        return `Got ${rowMatch[1]} rows.`;
+      }
+      // Check for tabular data
+      const lines = text.split('\n').filter(l => l.trim());
+      if (lines.length > 2) {
+        return `Got ${lines.length - 1} rows of data.`;
+      }
+      if (text.toLowerCase().includes('no rows') || text.toLowerCase().includes('0 rows')) {
+        return 'Query returned no results.';
+      }
+      if (text.toLowerCase().includes('error')) {
+        return 'Query returned an error.';
+      }
+      return '';
     }
-    
-    return {
-      isEmpty: false,
-      isError: false,
-      isArray: false,
-      count: 1,
-      hasData: true,
-    };
+
+    if (lower.includes('schema') || lower.includes('describe') || lower.includes('list_table')) {
+      return 'Got schema information.';
+    }
+
+    return '';
+  }
+
+  /**
+   * Extract readable text from various result formats
+   */
+  private extractText(result: unknown): string {
+    if (typeof result === 'string') return result;
+    if (!result || typeof result !== 'object') return '';
+
+    // MCP-style: { content: [{ text: "..." }] }
+    const obj = result as Record<string, unknown>;
+    if (Array.isArray(obj.content)) {
+      return obj.content
+        .map((c: unknown) => {
+          if (typeof c === 'string') return c;
+          if (c && typeof c === 'object' && 'text' in (c as Record<string, unknown>)) {
+            return String((c as Record<string, unknown>).text);
+          }
+          return '';
+        })
+        .join('\n');
+    }
+    if (typeof obj.text === 'string') return obj.text;
+    if (typeof obj.result === 'string') return obj.result;
+
+    try {
+      return JSON.stringify(result).slice(0, 500);
+    } catch {
+      return '';
+    }
   }
 }
 

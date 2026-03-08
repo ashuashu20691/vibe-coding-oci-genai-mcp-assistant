@@ -674,322 +674,272 @@ function generateTable(
 function generateInteractiveHTML(
   data: unknown,
   title?: string,
-  options?: Record<string, unknown>
+  _options?: Record<string, unknown>
 ): VisualizationResult {
   const dataArray = Array.isArray(data) ? data : [];
-  const columns = dataArray.length > 0 && typeof dataArray[0] === 'object' && dataArray[0] !== null
-    ? Object.keys(dataArray[0])
-    : [];
+  if (dataArray.length === 0) {
+    return { type: 'html', content: generateEmptyChartHTML(title || 'Dashboard'), metadata: {} };
+  }
 
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title || 'Interactive Dashboard'}</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
+  const firstRow = dataArray[0] as Record<string, unknown>;
+  const columns = Object.keys(firstRow);
+
+  // Classify columns
+  const numericCols = columns.filter(c => {
+    const v = firstRow[c];
+    return typeof v === 'number' || (typeof v === 'string' && !isNaN(Number(v)) && v.trim() !== '');
+  }).filter(c => !c.toLowerCase().endsWith('_id') && c.toLowerCase() !== 'id');
+
+  const dateCols = columns.filter(c =>
+    c.toLowerCase().includes('date') || c.toLowerCase().includes('time') ||
+    c.toLowerCase().includes('year') || c.toLowerCase().includes('month')
+  );
+
+  const categoryCols = columns.filter(c =>
+    !numericCols.includes(c) && !dateCols.includes(c) &&
+    c.toLowerCase() !== 'id' && !c.toLowerCase().endsWith('_id')
+  );
+
+  const statusCol = columns.find(c =>
+    ['status', 'state', 'priority', 'severity', 'condition'].some(k => c.toLowerCase().includes(k))
+  );
+
+  // Build stats cards
+  const stats: Array<{ label: string; value: string; color: string; detail?: string }> = [
+    { label: 'Total Records', value: String(dataArray.length), color: '#3b82f6', detail: '' }
+  ];
+
+  for (const col of numericCols.slice(0, 3)) {
+    const values = dataArray.map(r => Number((r as Record<string, unknown>)[col]) || 0);
+    const total = values.reduce((a, b) => a + b, 0);
+    const avg = total / values.length;
+    stats.push({
+      label: `Total ${col.replace(/_/g, ' ')}`,
+      value: total % 1 === 0 ? total.toLocaleString() : total.toFixed(2),
+      color: '#10b981',
+      detail: `Avg: ${avg.toFixed(1)}`
+    });
+  }
+
+  if (statusCol) {
+    const counts: Record<string, number> = {};
+    dataArray.forEach(r => {
+      const v = String((r as Record<string, unknown>)[statusCol]);
+      counts[v] = (counts[v] || 0) + 1;
+    });
+    const critical = Object.entries(counts).filter(([k]) =>
+      /delayed|critical|fail|error|overdue/i.test(k)
+    );
+    if (critical.length > 0) {
+      const critCount = critical.reduce((s, [, c]) => s + c, 0);
+      stats.push({ label: 'Critical Items', value: String(critCount), color: '#ef4444', detail: critical.map(([k, v]) => `${k}: ${v}`).join(', ') });
     }
-    
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      padding: 20px;
-      min-height: 100vh;
+  }
+
+  // Build alerts
+  const alerts: string[] = [];
+  if (statusCol) {
+    const delayed = dataArray.filter(r => /delayed|critical|fail/i.test(String((r as Record<string, unknown>)[statusCol])));
+    if (delayed.length > 0) {
+      alerts.push(`⚠️ ${delayed.length} items have critical/delayed status`);
     }
-    
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      overflow: hidden;
-    }
-    
-    .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 30px;
-      text-align: center;
-    }
-    
-    .header h1 {
-      font-size: 2.5em;
-      margin-bottom: 10px;
-    }
-    
-    .filters {
-      padding: 20px 30px;
-      background: #f8f9fa;
-      border-bottom: 1px solid #dee2e6;
-      display: flex;
-      gap: 15px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    
-    .filter-group {
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
-    
-    .filter-group label {
-      font-size: 0.85em;
-      font-weight: 600;
-      color: #495057;
-    }
-    
-    .filter-group input,
-    .filter-group select {
-      padding: 8px 12px;
-      border: 1px solid #ced4da;
-      border-radius: 6px;
-      font-size: 0.95em;
-    }
-    
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 20px;
-      padding: 30px;
-      background: #f8f9fa;
-    }
-    
-    .stat-card {
-      background: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      text-align: center;
-    }
-    
-    .stat-card .value {
-      font-size: 2em;
-      font-weight: bold;
-      color: #667eea;
-      margin-bottom: 5px;
-    }
-    
-    .stat-card .label {
-      font-size: 0.9em;
-      color: #6c757d;
-    }
-    
-    .table-container {
-      padding: 30px;
-      overflow-x: auto;
-    }
-    
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: white;
-    }
-    
-    thead {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-    }
-    
-    th {
-      padding: 15px;
-      text-align: left;
-      font-weight: 600;
-      cursor: pointer;
-      user-select: none;
-    }
-    
-    th:hover {
-      background: rgba(255,255,255,0.1);
-    }
-    
-    td {
-      padding: 12px 15px;
-      border-bottom: 1px solid #dee2e6;
-    }
-    
-    tbody tr:hover {
-      background: #f8f9fa;
-    }
-    
-    .no-data {
-      text-align: center;
-      padding: 40px;
-      color: #6c757d;
-      font-size: 1.1em;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>${title || 'Interactive Dashboard'}</h1>
-      <p>Filter and explore your data</p>
-    </div>
-    
-    <div class="filters">
-      <div class="filter-group">
-        <label>Search</label>
-        <input type="text" id="searchInput" placeholder="Search all columns...">
-      </div>
-      ${columns.map(col => `
-      <div class="filter-group">
-        <label>${col}</label>
-        <select id="filter_${col}">
-          <option value="">All</option>
-        </select>
-      </div>
-      `).join('')}
-    </div>
-    
-    <div class="stats">
-      <div class="stat-card">
-        <div class="value" id="totalCount">0</div>
-        <div class="label">Total Records</div>
-      </div>
-      <div class="stat-card">
-        <div class="value" id="filteredCount">0</div>
-        <div class="label">Filtered Records</div>
-      </div>
-    </div>
-    
-    <div class="table-container">
-      <table id="dataTable">
-        <thead>
-          <tr>
-            ${columns.map(col => `<th onclick="sortTable('${col}')">${col} ▼</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody id="tableBody">
-        </tbody>
-      </table>
-      <div id="noData" class="no-data" style="display: none;">
-        No data matches your filters
-      </div>
-    </div>
-  </div>
-  
-  <script>
-    const data = ${JSON.stringify(dataArray)};
-    const columns = ${JSON.stringify(columns)};
-    let filteredData = [...data];
-    let sortColumn = null;
-    let sortAsc = true;
-    
-    // Initialize
-    function init() {
-      populateFilters();
-      renderTable();
-      updateStats();
-      
-      document.getElementById('searchInput').addEventListener('input', applyFilters);
-      columns.forEach(col => {
-        document.getElementById('filter_' + col).addEventListener('change', applyFilters);
-      });
-    }
-    
-    // Populate filter dropdowns
-    function populateFilters() {
-      columns.forEach(col => {
-        const select = document.getElementById('filter_' + col);
-        const uniqueValues = [...new Set(data.map(row => row[col]))].sort();
-        uniqueValues.forEach(val => {
-          const option = document.createElement('option');
-          option.value = val;
-          option.textContent = val;
-          select.appendChild(option);
-        });
-      });
-    }
-    
-    // Apply filters
-    function applyFilters() {
-      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-      
-      filteredData = data.filter(row => {
-        // Search filter
-        const matchesSearch = searchTerm === '' || 
-          columns.some(col => String(row[col]).toLowerCase().includes(searchTerm));
-        
-        // Column filters
-        const matchesFilters = columns.every(col => {
-          const filterValue = document.getElementById('filter_' + col).value;
-          return filterValue === '' || String(row[col]) === filterValue;
-        });
-        
-        return matchesSearch && matchesFilters;
-      });
-      
-      renderTable();
-      updateStats();
-    }
-    
-    // Sort table
-    function sortTable(column) {
-      if (sortColumn === column) {
-        sortAsc = !sortAsc;
-      } else {
-        sortColumn = column;
-        sortAsc = true;
-      }
-      
-      filteredData.sort((a, b) => {
-        const aVal = a[column];
-        const bVal = b[column];
-        
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          return sortAsc ? aVal - bVal : bVal - aVal;
-        }
-        
-        const aStr = String(aVal);
-        const bStr = String(bVal);
-        return sortAsc ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr);
-      });
-      
-      renderTable();
-    }
-    
-    // Render table
-    function renderTable() {
-      const tbody = document.getElementById('tableBody');
-      const noData = document.getElementById('noData');
-      
-      if (filteredData.length === 0) {
-        tbody.innerHTML = '';
-        noData.style.display = 'block';
-        return;
-      }
-      
-      noData.style.display = 'none';
-      tbody.innerHTML = filteredData.map(row => 
-        '<tr>' + columns.map(col => '<td>' + row[col] + '</td>').join('') + '</tr>'
-      ).join('');
-    }
-    
-    // Update statistics
-    function updateStats() {
-      document.getElementById('totalCount').textContent = data.length;
-      document.getElementById('filteredCount').textContent = filteredData.length;
-    }
-    
-    init();
-  </script>
-</body>
-</html>`;
+  }
+
+  // Build charts config
+  const charts: Array<{ id: string; title: string; type: string; config: string }> = [];
+
+  // Chart 1: Category breakdown (bar)
+  const catCol = categoryCols[0];
+  const metricCol = numericCols[0];
+  if (catCol && metricCol) {
+    const agg: Record<string, number> = {};
+    dataArray.forEach(r => {
+      const row = r as Record<string, unknown>;
+      const key = String(row[catCol]);
+      agg[key] = (agg[key] || 0) + (Number(row[metricCol]) || 0);
+    });
+    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#e11d48'];
+    charts.push({
+      id: 'chart_bar',
+      title: `${metricCol.replace(/_/g, ' ')} by ${catCol.replace(/_/g, ' ')}`,
+      type: 'bar',
+      config: JSON.stringify({
+        type: 'bar',
+        data: {
+          labels: sorted.map(([k]) => k),
+          datasets: [{ label: metricCol, data: sorted.map(([, v]) => v), backgroundColor: colors.slice(0, sorted.length), borderRadius: 6 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
+      })
+    });
+  }
+
+  // Chart 2: Status distribution (doughnut)
+  if (statusCol) {
+    const counts: Record<string, number> = {};
+    dataArray.forEach(r => { const v = String((r as Record<string, unknown>)[statusCol]); counts[v] = (counts[v] || 0) + 1; });
+    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const statusColors = entries.map(([k]) => {
+      if (/delayed|critical|fail|error/i.test(k)) return '#ef4444';
+      if (/warning|pending|transit/i.test(k)) return '#f59e0b';
+      if (/success|delivered|complete|active|on.?time/i.test(k)) return '#10b981';
+      return '#6366f1';
+    });
+    charts.push({
+      id: 'chart_status',
+      title: `${statusCol.replace(/_/g, ' ')} Distribution`,
+      type: 'doughnut',
+      config: JSON.stringify({
+        type: 'doughnut',
+        data: { labels: entries.map(([k]) => k), datasets: [{ data: entries.map(([, v]) => v), backgroundColor: statusColors, borderWidth: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12 } } } }
+      })
+    });
+  }
+
+  // Chart 3: Time trend (line)
+  const dateCol = dateCols[0];
+  if (dateCol && metricCol) {
+    const sorted = [...dataArray].sort((a, b) => String((a as Record<string, unknown>)[dateCol]).localeCompare(String((b as Record<string, unknown>)[dateCol])));
+    const labels = sorted.slice(0, 50).map(r => String((r as Record<string, unknown>)[dateCol]));
+    const values = sorted.slice(0, 50).map(r => Number((r as Record<string, unknown>)[metricCol]) || 0);
+    charts.push({
+      id: 'chart_trend',
+      title: `${metricCol.replace(/_/g, ' ')} Over Time`,
+      type: 'line',
+      config: JSON.stringify({
+        type: 'line',
+        data: { labels, datasets: [{ label: metricCol, data: values, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, pointRadius: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 10 } } } }
+      })
+    });
+  }
+
+  // Chart 4: Second metric bar if available
+  if (catCol && numericCols.length > 1) {
+    const metric2 = numericCols[1];
+    const agg: Record<string, number> = {};
+    dataArray.forEach(r => { const row = r as Record<string, unknown>; agg[String(row[catCol])] = (agg[String(row[catCol])] || 0) + (Number(row[metric2]) || 0); });
+    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    charts.push({
+      id: 'chart_bar2',
+      title: `${metric2.replace(/_/g, ' ')} by ${catCol.replace(/_/g, ' ')}`,
+      type: 'bar',
+      config: JSON.stringify({
+        type: 'bar',
+        data: { labels: sorted.map(([k]) => k), datasets: [{ label: metric2, data: sorted.map(([, v]) => v), backgroundColor: '#8b5cf6', borderRadius: 6 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
+      })
+    });
+  }
+
+  // Build table rows (first 20)
+  const displayCols = columns.slice(0, 8);
+  const tableRows = dataArray.slice(0, 20);
+
+  // Generate the HTML
+  const dashTitle = title || 'Interactive Dashboard';
+  const html = buildDashboardHTML(dashTitle, stats, alerts, charts, displayCols, tableRows);
 
   return {
     type: 'html',
     content: html,
-    metadata: {
-      columns,
-      rowCount: dataArray.length,
-    },
+    metadata: { columns, rowCount: dataArray.length },
   };
+}
+
+function buildDashboardHTML(
+  title: string,
+  stats: Array<{ label: string; value: string; color: string; detail?: string }>,
+  alerts: string[],
+  charts: Array<{ id: string; title: string; type: string; config: string }>,
+  displayCols: string[],
+  tableRows: unknown[]
+): string {
+  const chartCanvases = charts.map(c =>
+    `<div class="card"><h3>${c.title}</h3><div class="chart-box"><canvas id="${c.id}"></canvas></div></div>`
+  ).join('\n');
+
+  const chartScripts = charts.map(c =>
+    `new Chart(document.getElementById('${c.id}'), ${c.config});`
+  ).join('\n');
+
+  const statsHTML = stats.map(s =>
+    `<div class="stat"><div class="stat-val" style="color:${s.color}">${s.value}</div><div class="stat-lbl">${s.label}</div>${s.detail ? `<div class="stat-detail">${s.detail}</div>` : ''}</div>`
+  ).join('\n');
+
+  const alertsHTML = alerts.length > 0
+    ? `<div class="alerts">${alerts.map(a => `<div class="alert">${a}</div>`).join('')}</div>`
+    : '';
+
+  const theadHTML = displayCols.map(c => `<th>${c}</th>`).join('');
+  const tbodyHTML = tableRows.map(r => {
+    const row = r as Record<string, unknown>;
+    return '<tr>' + displayCols.map(c => {
+      const val = String(row[c] ?? '');
+      // Color-code status cells
+      let cls = '';
+      if (/delayed|critical|fail|error/i.test(val)) cls = ' class="cell-red"';
+      else if (/warning|pending|transit/i.test(val)) cls = ' class="cell-yellow"';
+      else if (/success|delivered|complete|active|on.?time/i.test(val)) cls = ' class="cell-green"';
+      return `<td${cls}>${val}</td>`;
+    }).join('') + '</tr>';
+  }).join('\n');
+
+  // Determine chart grid layout
+  const chartCount = charts.length;
+  const gridCols = chartCount <= 1 ? '1fr' : chartCount === 2 ? '1fr 1fr' : 'repeat(2, 1fr)';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"><\/script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#1e293b 0%,#0f172a 100%);min-height:100vh;color:#e2e8f0;padding:20px}
+.dash{max-width:1200px;margin:0 auto}
+.header{text-align:center;margin-bottom:24px}
+.header h1{font-size:1.8em;background:linear-gradient(135deg,#38bdf8,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.header p{color:#64748b;font-size:.85em}
+.alerts{margin-bottom:16px}
+.alert{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 16px;color:#fca5a5;font-size:.9em;margin-bottom:8px}
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:rgba(255,255,255,.06);border-radius:10px;padding:16px;text-align:center;border:1px solid rgba(255,255,255,.08)}
+.stat-val{font-size:1.8em;font-weight:700;line-height:1.2}
+.stat-lbl{color:#94a3b8;font-size:.8em;margin-top:4px}
+.stat-detail{color:#64748b;font-size:.75em;margin-top:2px}
+.chart-grid{display:grid;grid-template-columns:${gridCols};gap:16px;margin-bottom:20px}
+.card{background:rgba(255,255,255,.06);border-radius:10px;padding:16px;border:1px solid rgba(255,255,255,.08)}
+.card h3{font-size:.95em;color:#cbd5e1;margin-bottom:12px;font-weight:600}
+.chart-box{height:240px;position:relative}
+.table-card{background:rgba(255,255,255,.06);border-radius:10px;padding:16px;border:1px solid rgba(255,255,255,.08);overflow-x:auto}
+.table-card h3{font-size:.95em;color:#cbd5e1;margin-bottom:12px;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:.85em}
+th{background:rgba(255,255,255,.08);padding:10px 12px;text-align:left;color:#94a3b8;font-weight:600;white-space:nowrap}
+td{padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.06);color:#e2e8f0}
+tr:hover td{background:rgba(255,255,255,.03)}
+.cell-red{color:#fca5a5;font-weight:600}
+.cell-yellow{color:#fcd34d;font-weight:600}
+.cell-green{color:#86efac;font-weight:600}
+</style>
+</head>
+<body>
+<div class="dash">
+<div class="header"><h1>${title}</h1><p>Generated from ${tableRows.length > 0 ? (tableRows as unknown[]).length : 0}+ records • Real-time data</p></div>
+${alertsHTML}
+<div class="stats-row">${statsHTML}</div>
+<div class="chart-grid">${chartCanvases}</div>
+<div class="table-card"><h3>📋 Detailed Records</h3>
+<table><thead><tr>${theadHTML}</tr></thead><tbody>${tbodyHTML}</tbody></table>
+</div>
+</div>
+<script>${chartScripts}<\/script>
+</body>
+</html>`;
 }
 
 /**

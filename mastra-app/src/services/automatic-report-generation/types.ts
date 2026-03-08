@@ -158,3 +158,18 @@ export interface RenderedReport {
     dataRowCount: number;
   };
 }
+
+export interface ErrorRecoveryStrategy {
+  errorType: 'data_analysis' | 'visualization' | 'html_generation' | 'export' | 'workflow';
+  fallbackAction: () => Promise<FallbackResult>;
+  shouldRetry: boolean;
+  maxRetries: number;
+  logLevel: 'error' | 'warn' | 'info';
+}
+
+export interface FallbackResult {
+  success: boolean;
+  content: string;
+  message: string;
+  technicalDetails?: string;
+}
