@@ -70,6 +70,7 @@ interface MessageRow {
   TOOL_CALL_ID: string | null;
   TOOL_NARRATIVES: string | null;
   ADAPTATION_NARRATIVES: string | null;
+  VISUALIZATION: string | null;
   CREATED_AT: Date;
 }
 
@@ -145,6 +146,16 @@ export class ConversationStore {
     try {
       await initializePool(this.config);
       this.initialized = true;
+      
+      // Try to add visualization column if it doesn't exist
+      try {
+        await executeStatement(
+          `ALTER TABLE messages ADD (visualization CLOB)`
+        );
+        console.log('[ConversationStore] Added visualization column to messages table');
+      } catch (e) {
+        // Column already exists or table doesn't exist — both are fine
+      }
     } catch (error) {
       throw new DBConnectionError(
         `Failed to initialize Oracle connection: ${error instanceof Error ? error.message : String(error)}`,
@@ -525,13 +536,14 @@ export class ConversationStore {
     const toolCallsJson = message.toolCalls ? JSON.stringify(message.toolCalls) : null;
     const toolNarrativesJson = message.toolNarratives ? JSON.stringify(message.toolNarratives) : null;
     const adaptationNarrativesJson = message.adaptationNarratives ? JSON.stringify(message.adaptationNarratives) : null;
+    const visualizationJson = message.visualization ? JSON.stringify(message.visualization) : null;
 
     try {
-      // Try with all columns first
+      // Try with all columns first (including visualization)
       try {
         await executeStatement(
-          `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at)
-           VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, :toolNarratives, :adaptationNarratives, SYSTIMESTAMP)`,
+          `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, visualization, created_at)
+           VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, :toolNarratives, :adaptationNarratives, :visualization, SYSTIMESTAMP)`,
           {
             id,
             conversationId,
@@ -541,23 +553,46 @@ export class ConversationStore {
             toolCallId: message.toolCallId || null,
             toolNarratives: toolNarrativesJson,
             adaptationNarratives: adaptationNarrativesJson,
+            visualization: visualizationJson,
           }
         );
       } catch (error) {
-        // Fallback: insert without optional columns if they don't exist
+        // Fallback: try without visualization column
         if (error instanceof Error && error.message.includes('ORA-00904')) {
-          await executeStatement(
-            `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
-             VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, SYSTIMESTAMP)`,
-            {
-              id,
-              conversationId,
-              role: message.role,
-              content: message.content || '',
-              toolCalls: toolCallsJson,
-              toolCallId: message.toolCallId || null,
+          try {
+            await executeStatement(
+              `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at)
+               VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, :toolNarratives, :adaptationNarratives, SYSTIMESTAMP)`,
+              {
+                id,
+                conversationId,
+                role: message.role,
+                content: message.content || '',
+                toolCalls: toolCallsJson,
+                toolCallId: message.toolCallId || null,
+                toolNarratives: toolNarrativesJson,
+                adaptationNarratives: adaptationNarrativesJson,
+              }
+            );
+          } catch (error2) {
+            // Final fallback: insert without optional columns
+            if (error2 instanceof Error && error2.message.includes('ORA-00904')) {
+              await executeStatement(
+                `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, created_at)
+                 VALUES (:id, :conversationId, :role, :content, :toolCalls, :toolCallId, SYSTIMESTAMP)`,
+                {
+                  id,
+                  conversationId,
+                  role: message.role,
+                  content: message.content || '',
+                  toolCalls: toolCallsJson,
+                  toolCallId: message.toolCallId || null,
+                }
+              );
+            } else {
+              throw error2;
             }
-          );
+          }
         } else {
           throw error;
         }
@@ -578,6 +613,7 @@ export class ConversationStore {
         toolCallId: message.toolCallId,
         toolNarratives: message.toolNarratives,
         adaptationNarratives: message.adaptationNarratives,
+        visualization: message.visualization,
       };
     } catch (error) {
       throw new SQLExecutionError(
@@ -596,11 +632,11 @@ export class ConversationStore {
 
     try {
       console.log('[getMessages] Querying messages for conversation:', conversationId);
-      // Try with all columns first
+      // Try with all columns first (including visualization)
       let rows: MessageRow[];
       try {
         rows = await executeQuery<MessageRow>(
-          `SELECT id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at
+          `SELECT id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, visualization, created_at
            FROM messages
            WHERE conversation_id = :conversationId
            ORDER BY created_at ASC`,
@@ -608,16 +644,28 @@ export class ConversationStore {
         );
         console.log('[getMessages] Query with all columns succeeded, rows:', rows.length);
       } catch (error) {
-        console.log('[getMessages] Query with all columns failed, trying fallback:', error);
-        // Fallback: query without optional columns if they don't exist
-        rows = await executeQuery<MessageRow>(
-          `SELECT id, role, content, tool_calls, tool_call_id, created_at
-           FROM messages
-           WHERE conversation_id = :conversationId
-           ORDER BY created_at ASC`,
-          { conversationId }
-        );
-        console.log('[getMessages] Fallback query succeeded, rows:', rows.length);
+        console.log('[getMessages] Query with all columns failed, trying without visualization:', error);
+        try {
+          rows = await executeQuery<MessageRow>(
+            `SELECT id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at
+             FROM messages
+             WHERE conversation_id = :conversationId
+             ORDER BY created_at ASC`,
+            { conversationId }
+          );
+          console.log('[getMessages] Query without visualization succeeded, rows:', rows.length);
+        } catch (error2) {
+          console.log('[getMessages] Query without narratives failed, trying minimal:', error2);
+          // Fallback: query without optional columns if they don't exist
+          rows = await executeQuery<MessageRow>(
+            `SELECT id, role, content, tool_calls, tool_call_id, created_at
+             FROM messages
+             WHERE conversation_id = :conversationId
+             ORDER BY created_at ASC`,
+            { conversationId }
+          );
+          console.log('[getMessages] Minimal query succeeded, rows:', rows.length);
+        }
       }
 
       return rows.map(row => {
@@ -651,6 +699,16 @@ export class ConversationStore {
           }
         }
 
+        let visualization = undefined;
+        const visualizationStr = toString(row.VISUALIZATION);
+        if (visualizationStr) {
+          try {
+            visualization = JSON.parse(visualizationStr);
+          } catch {
+            // Invalid JSON, leave as undefined
+          }
+        }
+
         return {
           id: String(row.ID),
           role: String(row.ROLE) as MessageRole,
@@ -659,6 +717,7 @@ export class ConversationStore {
           toolCallId: row.TOOL_CALL_ID ? String(row.TOOL_CALL_ID) : undefined,
           toolNarratives,
           adaptationNarratives,
+          visualization,
           timestamp: toDate(row.CREATED_AT),
         };
       });

@@ -378,7 +378,7 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false, onViewArti
         {/* Inline visualizations — show when present */}
         {message?.visualization && (
           <div className="mt-4">
-            {message.visualization.routedToArtifacts ? (
+            {(message.visualization.routedToArtifacts || (message.visualization.html && message.visualization.html.length > 500)) ? (
               /* Visualization was routed to artifacts panel — clickable link like Claude's "View your report" */
               <button
                 onClick={() => onViewArtifact?.()}

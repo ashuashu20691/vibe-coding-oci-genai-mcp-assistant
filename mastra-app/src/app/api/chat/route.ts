@@ -670,6 +670,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
         let fullResponse = '';
         const allToolCalls: ToolCall[] = [];
         const allToolResults: Array<{ toolCallId: string; result: unknown }> = [];
+        let lastVisualization: Record<string, unknown> | null = null;
         
         // Collect tool narratives for saving
         const toolNarratives: Array<{ toolCallId: string; toolName: string; phase: 'start' | 'result' | 'error'; narrative: string; timestamp: Date }> = [];
@@ -751,6 +752,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
             controller.close();
+            // Note: lastVisualization not needed here since we close the stream immediately
             return;
           } catch (vizError) {
             console.error('[chat/POST] Direct visualization error:', vizError);
@@ -972,6 +974,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                         }
                         visualizationData.data = data;
 
+                        lastVisualization = visualizationData;
                         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
                       } catch (vizError) {
                         console.error('[chat/POST] Visualization error:', vizError);
@@ -1061,6 +1064,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                       } else if (typeof viz.content === 'object' && viz.content !== null) {
                         Object.assign(visualizationData, viz.content);
                       }
+                      lastVisualization = visualizationData;
                       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
                       console.log('[chat/POST] Sent override visualization after AI refusal');
                     } catch (e) {
@@ -1082,14 +1086,36 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           // Save assistant message to database
           if (conversationId && fullResponse && conversationStore) {
             try {
+              // If visualization has large HTML (>500 chars), save only a lightweight marker.
+              // The full artifact is already persisted separately via /api/conversations/[id]/artifact.
+              // This prevents bloating the messages table with huge HTML blobs.
+              let vizToSave: { type: string; title?: string; html?: string; data?: Record<string, unknown>[]; routedToArtifacts?: boolean } | undefined;
+              if (lastVisualization) {
+                if (typeof lastVisualization.html === 'string' && (lastVisualization.html as string).length > 500) {
+                  vizToSave = {
+                    type: String(lastVisualization.type || 'custom_dashboard'),
+                    title: lastVisualization.title ? String(lastVisualization.title) : undefined,
+                    routedToArtifacts: true,
+                  };
+                } else {
+                  vizToSave = {
+                    type: String(lastVisualization.type || 'unknown'),
+                    title: lastVisualization.title ? String(lastVisualization.title) : undefined,
+                    html: typeof lastVisualization.html === 'string' ? lastVisualization.html : undefined,
+                    data: Array.isArray(lastVisualization.data) ? lastVisualization.data as Record<string, unknown>[] : undefined,
+                  };
+                }
+              }
+              // We track visualization in the stream — save it with the message
               await conversationStore.addMessage(conversationId, {
                 role: 'assistant',
                 content: fullResponse,
                 timestamp: new Date(),
                 toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
                 toolNarratives: toolNarratives.length > 0 ? toolNarratives : undefined,
+                visualization: vizToSave || undefined,
               });
-              console.log(`[chat] Saved assistant message to conversation ${conversationId} with ${toolNarratives.length} tool narratives`);
+              console.log(`[chat] Saved assistant message to conversation ${conversationId} with ${toolNarratives.length} tool narratives, viz: ${lastVisualization ? 'yes' : 'no'}`);
             } catch (e) {
               logError('chat/saveMessage', e, { conversationId });
             }
