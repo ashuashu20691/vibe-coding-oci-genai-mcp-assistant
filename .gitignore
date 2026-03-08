@@ -22,6 +22,7 @@ eggs/
 .eggs/
 lib/
 lib64/
+!mastra-app/src/lib/
 parts/
 sdist/
 var/
