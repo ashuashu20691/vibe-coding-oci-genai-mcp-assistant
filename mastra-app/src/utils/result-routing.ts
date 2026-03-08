@@ -11,22 +11,36 @@ import type { Message } from '@/types';
 /**
  * Determines if a visualization should be routed to the artifacts panel
  * 
- * Routing rules:
- * - HTML-based visualizations (have .html field) → Always inline in chat
- * - Visual chart types (bar, line, pie, etc.) → Artifacts panel
+ * Routing rules (Claude Desktop parity):
+ * - Dashboards and custom HTML → Always artifacts panel (right side)
+ * - Chart types with data → Artifacts panel for native rendering
  * - Tables with > MAX_INLINE_ROWS → Artifacts panel
  * - Small tables (≤ MAX_INLINE_ROWS) → Inline in chat
+ * - Simple status/text → Inline in chat
  */
 export function shouldRouteToArtifacts(visualization: Message['visualization']): boolean {
   if (!visualization) return false;
   
-  // HTML-based visualizations stay inline — they're already rendered HTML
-  // This covers: automatic_report, html, bar_chart with html, custom_dashboard, etc.
+  const type = visualization.type?.toLowerCase() || '';
+  
+  // Dashboards always go to artifacts panel — this is the Claude Desktop behavior
+  if (type.includes('dashboard') || type === 'custom_dashboard' || type === 'analysis_dashboard') {
+    return true;
+  }
+  
+  // HTML visualizations with chart/dashboard content go to artifacts panel
   if (visualization.html) {
+    // Check if the HTML is a substantial visualization (not just a small status message)
+    const htmlLen = visualization.html.length;
+    // Dashboards and charts are typically > 500 chars of HTML
+    if (htmlLen > 500) {
+      return true;
+    }
+    // Small HTML snippets stay inline
     return false;
   }
   
-  // Data-only chart types (no html) go to artifacts panel for rendering
+  // Data-only chart types go to artifacts panel for native rendering
   const artifactChartTypes = [
     'bar_chart',
     'line_chart', 
@@ -38,18 +52,16 @@ export function shouldRouteToArtifacts(visualization: Message['visualization']):
     'photo_gallery',
     'timeline',
     'mermaid',
-    'custom_dashboard',
-    'analysis_dashboard',
     'gallery',
     'grouped_gallery',
   ];
   
-  if (artifactChartTypes.includes(visualization.type) && !visualization.html) {
+  if (artifactChartTypes.includes(type)) {
     return true;
   }
   
   // Tables with more than MAX_INLINE_ROWS go to artifacts panel
-  if (visualization.type === 'table' && visualization.data) {
+  if (type === 'table' && visualization.data) {
     const rowCount = Array.isArray(visualization.data) ? visualization.data.length : 0;
     return rowCount > MAX_INLINE_ROWS;
   }

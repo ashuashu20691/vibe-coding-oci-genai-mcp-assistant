@@ -152,7 +152,7 @@ export class WorkflowOrchestrator {
    * Requirement 4.4: Pass selected database to workflow context
    * Requirement 5.5: Update schema cache on database change
    * 
-   * @param steps - Array of workflow steps
+   * @param steps - Array of workflow steps (initial — more can be added dynamically)
    * @param context - Workflow context
    * @returns Execution plan with dependency-ordered steps
    */
@@ -191,6 +191,74 @@ export class WorkflowOrchestrator {
     this.activePlans.set(planId, plan);
     return plan;
   }
+
+  /**
+   * Dynamically add a step to an active execution plan.
+   * Supports the "Dynamic Task List" pattern — the agent can discover new work
+   * during execution and inject it into the plan on-the-fly.
+   * 
+   * @param planId - ID of the active plan
+   * @param step - New step to add
+   * @param insertAfter - Optional step ID to insert after (appends to end if omitted)
+   * @returns true if step was added successfully
+   */
+  addStepToPlan(planId: string, step: WorkflowStep, insertAfter?: string): boolean {
+    const plan = this.activePlans.get(planId);
+    if (!plan) return false;
+
+    // Validate that dependencies exist
+    for (const depId of step.dependencies) {
+      if (!plan.steps.some(s => s.id === depId)) {
+        console.warn(`[WorkflowOrchestrator] Cannot add step "${step.id}": dependency "${depId}" not found`);
+        return false;
+      }
+    }
+
+    if (insertAfter) {
+      const idx = plan.steps.findIndex(s => s.id === insertAfter);
+      if (idx >= 0) {
+        plan.steps.splice(idx + 1, 0, step);
+      } else {
+        plan.steps.push(step);
+      }
+    } else {
+      plan.steps.push(step);
+    }
+
+    return true;
+  }
+
+  /**
+   * Remove a pending step from an active plan.
+   * Only pending steps can be removed — running/completed steps are immutable.
+   * 
+   * @param planId - ID of the active plan
+   * @param stepId - ID of the step to remove
+   * @returns true if step was removed
+   */
+  removeStepFromPlan(planId: string, stepId: string): boolean {
+    const plan = this.activePlans.get(planId);
+    if (!plan) return false;
+
+    const idx = plan.steps.findIndex(s => s.id === stepId);
+    if (idx < 0) return false;
+
+    const step = plan.steps[idx];
+    if (step.status !== 'pending') {
+      console.warn(`[WorkflowOrchestrator] Cannot remove step "${stepId}": status is ${step.status}`);
+      return false;
+    }
+
+    // Check no other steps depend on this one
+    const hasDependents = plan.steps.some(s => s.dependencies.includes(stepId));
+    if (hasDependents) {
+      console.warn(`[WorkflowOrchestrator] Cannot remove step "${stepId}": other steps depend on it`);
+      return false;
+    }
+
+    plan.steps.splice(idx, 1);
+    return true;
+  }
   /**
    * Automatically inject report generation steps after query execution steps
    * Validates: Requirements 6.1, 6.2
@@ -224,7 +292,10 @@ export class WorkflowOrchestrator {
   }
 
   /**
-   * Execute a workflow plan with progress streaming
+   * Execute a workflow plan with progress streaming.
+   * Supports dynamic task injection — steps can be added during execution
+   * based on what the agent discovers (e.g., new tables found in schema).
+   * 
    * Validates: Requirements 1.1, 1.2, 1.7
    * 
    * @param plan - Execution plan to run
@@ -239,16 +310,18 @@ export class WorkflowOrchestrator {
     const previousResults = new Map<string, unknown>();
     
     let completedSteps = 0;
-    const totalSteps = plan.steps.length;
 
     try {
-      // Execute steps in dependency order
-      for (let i = 0; i < plan.steps.length; i++) {
+      // Use index-based loop so dynamically added steps are picked up
+      let i = 0;
+      while (i < plan.steps.length) {
         const step = plan.steps[i];
+        const totalSteps = plan.steps.length; // Recalculate — may have grown
         
         // Check if dependencies are satisfied
         if (!this.areDependenciesSatisfied(step, plan.steps)) {
           step.status = 'skipped';
+          i++;
           continue;
         }
         
@@ -309,6 +382,22 @@ export class WorkflowOrchestrator {
               insights: stepInsights,
             });
           }
+
+          // Dynamic task injection: if the step result contains suggested next steps,
+          // add them to the plan. This enables the "discover and adapt" pattern.
+          if (result && typeof result === 'object' && 'suggestedSteps' in result) {
+            const suggested = (result as { suggestedSteps: WorkflowStep[] }).suggestedSteps;
+            if (Array.isArray(suggested)) {
+              for (const newStep of suggested) {
+                // Ensure the new step depends on the current step
+                if (!newStep.dependencies.includes(step.id)) {
+                  newStep.dependencies.push(step.id);
+                }
+                this.addStepToPlan(plan.id, newStep, step.id);
+                console.log(`[WorkflowOrchestrator] Dynamically added step: ${newStep.id} (${newStep.description})`);
+              }
+            }
+          }
         } catch (error) {
           // Mark step as failed
           step.status = 'failed';
@@ -343,6 +432,8 @@ export class WorkflowOrchestrator {
           
           // Non-critical step - continue with remaining steps
         }
+        
+        i++;
       }
       
       // Generate final insights from all results
@@ -353,7 +444,7 @@ export class WorkflowOrchestrator {
       if (onProgress) {
         onProgress({
           type: 'workflow_complete',
-          totalSteps,
+          totalSteps: plan.steps.length,
           insights: finalInsights,
         });
       }
@@ -364,7 +455,7 @@ export class WorkflowOrchestrator {
         success: errors.length === 0,
         planId: plan.id,
         completedSteps,
-        totalSteps,
+        totalSteps: plan.steps.length,
         outputs,
         insights,
         errors,
@@ -377,7 +468,7 @@ export class WorkflowOrchestrator {
         success: false,
         planId: plan.id,
         completedSteps,
-        totalSteps,
+        totalSteps: plan.steps.length,
         outputs,
         insights,
         errors: [

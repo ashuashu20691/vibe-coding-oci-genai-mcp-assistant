@@ -118,13 +118,20 @@ export async function PUT(
  * Handles Date objects and React components that can't be directly serialized
  */
 function serializeArtifact(artifact: Artifact): Record<string, unknown> {
+  // createdAt/updatedAt may be Date objects or ISO strings (from JSON deserialization)
+  const toISO = (val: Date | string): string => {
+    if (val instanceof Date) return val.toISOString();
+    if (typeof val === 'string') return val;
+    return new Date().toISOString();
+  };
+
   const serialized: Record<string, unknown> = {
     id: artifact.id,
     type: artifact.type,
     title: artifact.title,
     version: artifact.version,
-    createdAt: artifact.createdAt.toISOString(),
-    updatedAt: artifact.updatedAt.toISOString(),
+    createdAt: toISO(artifact.createdAt),
+    updatedAt: toISO(artifact.updatedAt),
     metadata: artifact.metadata,
   };
 

@@ -5,18 +5,12 @@
  */
 
 import { getMCPTools, getAgentState, updateAgentState } from './database-agent';
-import { analyzeData, type AnalysisResult } from './data-analysis-agent';
-import { generateVisualization, type VisualizationResult } from './visualization-agent';
-import { AnalysisAgent, AnalysisRequest, AnalysisResponse } from './analysis-agent';
-import { IterationStateMachine, type RetryOptions } from '../../services/iteration-state-machine';
 import { RetryOrchestrator, type RetryStrategy } from '../../services/retry-orchestrator';
 
 export interface ToolExecutionResult {
   success: boolean;
   result?: unknown;
   error?: string;
-  analysis?: AnalysisResult;
-  visualization?: VisualizationResult;
   iterationCount?: number;
   attemptSummaries?: string[];
 }
@@ -28,7 +22,6 @@ export interface ToolExecutionResult {
 export class DatabaseOrchestrator {
   private conversationId: string;
   private modelId: string;
-  private iterationMachine: IterationStateMachine;
   private retryOrchestrator: RetryOrchestrator;
   private onIterationUpdate?: (iteration: number, maxIterations: number) => void;
   private onNarrative?: (narrative: string) => void;
@@ -36,7 +29,6 @@ export class DatabaseOrchestrator {
   constructor(conversationId: string, modelId: string) {
     this.conversationId = conversationId;
     this.modelId = modelId;
-    this.iterationMachine = new IterationStateMachine();
     this.retryOrchestrator = new RetryOrchestrator();
   }
 
@@ -73,12 +65,7 @@ export class DatabaseOrchestrator {
    */
   async executeTool(
     toolName: string,
-    args: Record<string, unknown>,
-    options?: {
-      autoAnalyze?: boolean;
-      autoVisualize?: boolean;
-      visualizationType?: string;
-    }
+    args: Record<string, unknown>
   ): Promise<ToolExecutionResult> {
     const mcpTools = await getMCPTools();
     
@@ -196,38 +183,8 @@ export class DatabaseOrchestrator {
       attemptSummaries: retryResult.narratives,
     };
 
-    // If this was a successful SQL query, analyze and visualize the results
-    if (result.success && normalizedName === 'run-sql') {
-      const data = this.extractDataFromResult(result.result);
-      
-      if (data && Array.isArray(data) && data.length > 0) {
-        // Auto-analyze if enabled (default: true)
-        if (options?.autoAnalyze !== false) {
-          try {
-            const analysis = analyzeData({
-              data,
-              query: args.sql as string,
-            });
-            result.analysis = analysis;
-          } catch (error) {
-            console.error('[Orchestrator] Analysis failed:', error);
-          }
-        }
-
-        // Auto-visualize if enabled (default: true)
-        if (options?.autoVisualize !== false) {
-          try {
-            const visualization = await generateVisualization({
-              data,
-              type: (options?.visualizationType as 'auto' | 'bar' | 'line' | 'pie' | 'scatter' | 'table' | 'html') || 'auto',
-            });
-            result.visualization = visualization;
-          } catch (error) {
-            console.error('[Orchestrator] Visualization failed:', error);
-          }
-        }
-      }
-    }
+    // Analysis and visualization are handled by the route layer after tool results arrive.
+    // The orchestrator no longer auto-triggers these to avoid chart spam during exploration.
 
     return result;
   }
@@ -486,191 +443,5 @@ export class DatabaseOrchestrator {
     }
 
     return results;
-  }
-
-  /**
-   * Generate interactive HTML dashboard from query results.
-   * This provides Claude-like interactive data exploration.
-   */
-  async generateInteractiveDashboard(
-    sql: string,
-    title?: string
-  ): Promise<ToolExecutionResult> {
-    // Execute the query
-    const queryResult = await this.executeTool('run-sql', { sql_query: sql }, {
-      autoAnalyze: true,
-      autoVisualize: false, // We'll create custom HTML
-    });
-
-    if (!queryResult.success) {
-      return queryResult;
-    }
-
-    // Extract data
-    const data = this.extractDataFromResult(queryResult.result);
-    
-    if (!data || !Array.isArray(data) || data.length === 0) {
-      return {
-        success: false,
-        error: 'No data returned from query',
-      };
-    }
-
-    // Generate interactive HTML
-    const visualization = await generateVisualization({
-      data,
-      type: 'html',
-      title: title || 'Interactive Data Dashboard',
-    });
-
-    return {
-      success: true,
-      result: queryResult.result,
-      analysis: queryResult.analysis,
-      visualization,
-    };
-  }
-
-  /**
-   * Smart query execution with automatic insights and visualizations.
-   * This mimics Claude's behavior of automatically providing charts and analysis.
-   */
-  async smartQuery(
-    sql: string,
-    userIntent?: string
-  ): Promise<{
-    success: boolean;
-    data?: unknown[];
-    analysis?: AnalysisResult;
-    visualizations?: VisualizationResult[];
-    error?: string;
-  }> {
-    // Execute query with analysis
-    const result = await this.executeTool('run-sql', { sql_query: sql }, {
-      autoAnalyze: true,
-      autoVisualize: true,
-    });
-
-    if (!result.success) {
-      return {
-        success: false,
-        error: result.error,
-      };
-    }
-
-    const data = this.extractDataFromResult(result.result);
-    
-    if (!data || !Array.isArray(data)) {
-      return {
-        success: false,
-        error: 'Failed to extract data from query result',
-      };
-    }
-
-    // Generate multiple visualization options
-    const visualizations: VisualizationResult[] = [];
-
-    // Always include table view
-    const tableViz = await generateVisualization({
-      data,
-      type: 'table',
-    });
-    visualizations.push(tableViz);
-
-    // Add chart if appropriate
-    if (result.visualization) {
-      visualizations.push(result.visualization);
-    }
-
-    // Add interactive HTML for complex data
-    if (data.length > 5) {
-      const htmlViz = await generateVisualization({
-        data,
-        type: 'html',
-        title: 'Interactive Data Explorer',
-      });
-      visualizations.push(htmlViz);
-    }
-
-    return {
-      success: true,
-      data,
-      analysis: result.analysis,
-      visualizations,
-    };
-  }
-
-  /**
-   * Detects if a user message is an analysis request.
-   * Looks for keywords indicating data analysis needs.
-   * Implements Requirements 10.2, 10.3.
-   */
-  isAnalysisRequest(message: string): boolean {
-    const analysisKeywords = [
-      'analyze', 'analysis', 'fraud', 'detect', 'pattern',
-      'geographic', 'location', 'map', 'similar', 'similarity',
-      'trend', 'time series', 'compare', 'distribution',
-      'anomaly', 'outlier', 'dashboard', 'visualize',
-      'generate data', 'synthetic data', 'demo data',
-    ];
-    const messageLower = message.toLowerCase();
-    return analysisKeywords.some(keyword => messageLower.includes(keyword));
-  }
-
-  /**
-   * Executes the intelligent data analysis workflow.
-   * Implements Requirements 10.2, 10.3, 10.4, 10.5.
-   */
-  async executeAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {
-    const analysisAgent = new AnalysisAgent();
-    return analysisAgent.analyze(request);
-  }
-
-  /**
-   * Handles an analysis request and routes results to appropriate visualization.
-   * Implements Requirement 10.2-10.5 for conversational analysis flow.
-   */
-  async handleAnalysisRequest(
-    userMessage: string,
-    options?: {
-      recordCount?: number;
-      useExistingData?: boolean;
-    }
-  ): Promise<{
-    success: boolean;
-    response: AnalysisResponse;
-    visualizationHtml?: string;
-  }> {
-    const analysisAgent = new AnalysisAgent();
-    
-    const response = await analysisAgent.analyze({
-      naturalLanguageQuery: userMessage,
-      recordCount: options?.recordCount,
-      useExistingData: options?.useExistingData,
-    });
-
-    if (!response.success) {
-      return { success: false, response };
-    }
-
-    // Generate HTML visualization from dashboard
-    let visualizationHtml: string | undefined;
-    if (response.dashboard.sections.length > 0) {
-      const mainResult = response.queryResults.find(r => r.success && r.data.length > 0);
-      if (mainResult) {
-        const htmlViz = await generateVisualization({
-          data: mainResult.data,
-          type: 'html',
-          title: response.dashboard.title,
-        });
-        visualizationHtml = typeof htmlViz.content === 'string' ? htmlViz.content : undefined;
-      }
-    }
-
-    return {
-      success: true,
-      response,
-      visualizationHtml,
-    };
   }
 }

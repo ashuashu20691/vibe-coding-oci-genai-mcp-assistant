@@ -31,8 +31,9 @@ export class NarrativeStreamingService {
     toolArgs: Record<string, unknown>,
     context: ConversationContext
   ): AsyncGenerator<string> {
-    const action = this.formatToolAction(toolName);
-    yield `${action}...\n\n`;
+    // Concise mode: no pre-tool narration — let the tool call speak for itself
+    // The UI shows tool call badges; we don't need text commentary too
+    return;
   }
 
   /**
@@ -44,12 +45,9 @@ export class NarrativeStreamingService {
     toolResult: unknown,
     context: ConversationContext
   ): AsyncGenerator<string> {
-    const resultAnalysis = this.analyzeResult(toolResult);
-    
-    if (resultAnalysis.isEmpty) {
-      yield 'No results found.\n\n';
-    }
-    // For successful results, let the data/visualization speak for itself
+    // Concise mode: no post-tool narration
+    // The agent's final text response summarizes findings; we don't double-up
+    return;
   }
 
   /**

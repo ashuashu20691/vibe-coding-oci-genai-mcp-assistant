@@ -28,7 +28,7 @@ export interface InlineVisualizationProps {
 
 export function InlineVisualization({ 
   visualization, 
-  defaultExpanded = false 
+  defaultExpanded = true 
 }: InlineVisualizationProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [fullscreen, setFullscreen] = useState(false);
@@ -173,7 +173,7 @@ export function InlineVisualization({
             className="inline-visualization-content"
             style={{ 
               background: 'var(--bg-primary, #ffffff)', 
-              maxHeight: '400px',
+              maxHeight: '600px',
               overflow: 'auto'
             }}
             data-testid="inline-visualization-content"
@@ -181,7 +181,7 @@ export function InlineVisualization({
             <iframe
               srcDoc={visualization.html}
               className="w-full border-none block"
-              style={{ height: '400px', minHeight: '300px' }}
+              style={{ height: '500px', minHeight: '400px' }}
               sandbox="allow-scripts allow-same-origin"
               title={displayTitle}
             />

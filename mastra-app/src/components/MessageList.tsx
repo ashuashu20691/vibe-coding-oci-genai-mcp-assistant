@@ -19,11 +19,13 @@ interface MessageListProps {
   isLoading?: boolean;
   isStreaming?: boolean;
   onSuggestionClick?: (suggestion: string) => void;
+  /** Callback when user clicks "View in panel" on a visualization */
+  onViewArtifact?: () => void;
   /** Callback when a new message is submitted - used to reset scroll tracking */
   onNewMessageSubmitted?: boolean;
 }
 
-export function MessageList({ messages, isLoading = false, isStreaming = false, onSuggestionClick }: MessageListProps) {
+export function MessageList({ messages, isLoading = false, isStreaming = false, onSuggestionClick, onViewArtifact }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -122,6 +124,7 @@ export function MessageList({ messages, isLoading = false, isStreaming = false, 
                 message={message}
                 isLast={index === messages.length - 1}
                 isStreaming={index === messages.length - 1 && isLastMessageStreaming}
+                onViewArtifact={onViewArtifact}
               />
             </div>
           ))}
@@ -241,7 +244,7 @@ function WelcomeScreen({ onSuggestionClick }: { onSuggestionClick?: (s: string) 
   );
 }
 
-function MessageItem({ message, isLast: _isLast, isStreaming = false }: { message: UIMessage; isLast: boolean; isStreaming?: boolean }) {
+function MessageItem({ message, isLast: _isLast, isStreaming = false, onViewArtifact }: { message: UIMessage; isLast: boolean; isStreaming?: boolean; onViewArtifact?: () => void }) {
   const isUser = message?.role === 'user';
 
   // User messages - Claude Desktop style with right alignment (Requirement 12.1, 12.4)
@@ -293,7 +296,34 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
   const renderContentWithTools = () => {
     const content = message?.content || '';
     const toolCalls = message?.toolCalls || [];
+    const contentParts = message?.contentParts;
 
+    // If we have ordered contentParts, render them directly (Claude Desktop style)
+    if (contentParts && contentParts.length > 0) {
+      return (
+        <div>
+          {contentParts.map((part, i) => {
+            if (part.type === 'tool') {
+              return (
+                <div key={`part-${i}`} style={{ margin: '4px 0' }}>
+                  <ToolExecutionDisplay toolCall={part.toolCall} status="completed" />
+                </div>
+              );
+            }
+            const text = part.text;
+            if (!text.trim()) return null;
+            return (
+              <div key={`part-${i}`} style={{ marginBottom: '2px' }}>
+                <MarkdownRenderer content={text} />
+              </div>
+            );
+          })}
+          {isStreaming && <StreamingCursor />}
+        </div>
+      );
+    }
+
+    // Fallback: no contentParts (e.g., loaded from persistence)
     // No tool calls — just render text
     if (toolCalls.length === 0) {
       return (
@@ -304,52 +334,20 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
       );
     }
 
-    // Split the content into sentences/lines to interleave with tools in order.
-    // Strategy: split on newlines, insert each tool after the narrative line that
-    // mentions connecting/running/checking — in the order they appear.
-    const lines = content.split('\n').filter(l => l.trim());
-    
-    // Keywords that signal a tool was just executed
-    const toolTriggers = [
-      /connecting/i, /connected/i, /running query/i, /checking schema/i,
-      /retrieving/i, /fetching/i, /executing/i, /listing/i, /disconnecting/i,
-    ];
-
-    const segments: Array<{ type: 'text' | 'tool'; value: string | typeof toolCalls[0] }> = [];
-    let toolIdx = 0;
-
-    for (const line of lines) {
-      segments.push({ type: 'text', value: line });
-      // After a trigger line, insert the next pending tool
-      if (toolIdx < toolCalls.length && toolTriggers.some(r => r.test(line))) {
-        segments.push({ type: 'tool', value: toolCalls[toolIdx++] });
-      }
-    }
-
-    // Append any remaining tools at the end
-    while (toolIdx < toolCalls.length) {
-      segments.push({ type: 'tool', value: toolCalls[toolIdx++] });
-    }
-
+    // Fallback interleaving for persisted messages without contentParts:
+    // Render all text first, then all tool calls at the end
     return (
       <div>
-        {segments.map((seg, i) => {
-          if (seg.type === 'tool') {
-            const tc = seg.value as typeof toolCalls[0];
-            return (
-              <div key={`tool-${i}`} style={{ margin: '6px 0 10px' }}>
-                <ToolExecutionDisplay toolCall={tc} status="completed" />
-              </div>
-            );
-          }
-          const text = seg.value as string;
-          if (!text.trim()) return null;
-          return (
-            <div key={`text-${i}`} style={{ marginBottom: '4px' }}>
-              <MarkdownRenderer content={text} />
-            </div>
-          );
-        })}
+        {content.trim() && (
+          <div style={{ marginBottom: '4px' }}>
+            <MarkdownRenderer content={content} />
+          </div>
+        )}
+        {toolCalls.map((tc, i) => (
+          <div key={`tool-${i}`} style={{ margin: '4px 0' }}>
+            <ToolExecutionDisplay toolCall={tc} status="completed" />
+          </div>
+        ))}
         {isStreaming && <StreamingCursor />}
       </div>
     );
@@ -377,13 +375,67 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false }: { messag
             <InlineAnalysisCard analysis={message.analysis} defaultExpanded={false} />
           </div>
         )}
-        {/* Inline visualizations — always show when present */}
+        {/* Inline visualizations — show when present */}
         {message?.visualization && (
           <div className="mt-4">
-            {message.visualization.html ? (
+            {message.visualization.routedToArtifacts ? (
+              /* Visualization was routed to artifacts panel — clickable link like Claude's "View your report" */
+              <button
+                onClick={() => onViewArtifact?.()}
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '10px', 
+                  padding: '12px 16px', 
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '12px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.875rem',
+                  cursor: 'pointer',
+                  width: '100%',
+                  textAlign: 'left',
+                  transition: 'background 0.15s ease, border-color 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--bg-tertiary, var(--bg-secondary))';
+                  e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'var(--bg-secondary)';
+                  e.currentTarget.style.borderColor = 'var(--border-color)';
+                }}
+              >
+                <span style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  width: '36px', 
+                  height: '36px', 
+                  borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                  flexShrink: 0,
+                }}>
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--accent, #3b82f6)' }}>
+                    View your report
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {message.visualization.title} — Interactive Dashboard
+                  </div>
+                </div>
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="var(--text-muted)" strokeWidth={2} style={{ flexShrink: 0 }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            ) : message.visualization.html ? (
               <InlineVisualization visualization={message.visualization} defaultExpanded={true} />
             ) : message.visualization.data && Array.isArray(message.visualization.data) && message.visualization.data.length > 0 ? (
-              // Fallback: render as simple table if no HTML
+              /* Render native table for data-only visualizations that stayed inline */
               <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '8px' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                   <thead>

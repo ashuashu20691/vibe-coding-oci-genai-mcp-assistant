@@ -69,7 +69,7 @@ export class OCIModelAdapter {
     messages: ChatMessage[],
     options: GenerateOptions = {}
   ): AsyncGenerator<StreamChunk> {
-    const { tools, toolsets, maxSteps = 5, onStepFinish } = options;
+    const { tools, toolsets, maxSteps = 12, onStepFinish } = options;
 
     // Convert toolsets to tools array if provided
     let allTools: Tool[] = tools || [];
@@ -104,7 +104,8 @@ export class OCIModelAdapter {
       let finishReason = '';
 
       try {
-        // If there was an error in the previous step, add a forceful retry message
+        // If there was an error in the previous step, add it as a system message
+        // so the LLM can autonomously diagnose and fix the issue (ReAct pattern)
         if (lastError) {
           // Check if this is a repeated validation error - if so, stop retrying
           if (lastError.message.includes('validation failed') && consecutiveValidationErrors >= MAX_VALIDATION_RETRIES) {
@@ -119,10 +120,10 @@ export class OCIModelAdapter {
           
           const retryMessage = this.buildRetryMessage(lastError);
           currentMessages.push({
-            role: 'user',
+            role: 'system',
             content: retryMessage,
           });
-          console.log(`[OCIModelAdapter] Added retry message: ${retryMessage.slice(0, 200)}...`);
+          console.log(`[OCIModelAdapter] Added system retry message: ${retryMessage.slice(0, 200)}...`);
           lastError = null;
         }
 
@@ -130,7 +131,8 @@ export class OCIModelAdapter {
         for await (const chunk of this.provider.streamChat(
           currentMessages,
           this.modelId,
-          allTools.length > 0 ? allTools : undefined
+          allTools.length > 0 ? allTools : undefined,
+          this.maxTokens
         )) {
           // Handle text content
           if (chunk.content) {
@@ -198,10 +200,26 @@ export class OCIModelAdapter {
             stepToolResults.push({ toolCallId: tc.id, result, hasError });
             yield { type: 'tool-result', toolResult: { toolCallId: tc.id, result } };
 
-            // Add tool result to messages for next iteration
+            // Add tool result to messages — extract text content from MCP response structure
+            // to avoid storing huge JSON blobs that bloat context
+            let toolResultContent: string;
+            try {
+              const r = result as { content?: Array<{ text?: string }>; result?: { content?: Array<{ text?: string }> } };
+              const text = r?.content?.[0]?.text || r?.result?.content?.[0]?.text;
+              if (text) {
+                // Truncate large results (schema dumps can be huge)
+                toolResultContent = text.length > 3000 ? text.slice(0, 3000) + '\n... (truncated)' : text;
+              } else {
+                const raw = JSON.stringify(result);
+                toolResultContent = raw.length > 3000 ? raw.slice(0, 3000) + '...' : raw;
+              }
+            } catch {
+              toolResultContent = String(result).slice(0, 3000);
+            }
+
             currentMessages.push({
               role: 'tool',
-              content: JSON.stringify(result),
+              content: toolResultContent,
               toolCallId: tc.id,
             });
           }
@@ -246,22 +264,23 @@ export class OCIModelAdapter {
           continue;
         }
         
-        // If there were successful tool calls, check if we should continue
-        // For GENERIC format models, we need to send tool results back and let the model decide
+        // If there were successful tool calls, continue to let the model process results
+        // UNLESS the model explicitly signaled it's done (finishReason === 'stop')
         if (stepToolCalls.length > 0 && !hasErrors) {
-          // Check if finish reason indicates the model wants to continue (tool_calls)
-          // or if it's done (stop, COMPLETE)
-          const shouldContinue = finishReason === 'tool_calls' || 
-                                  finishReason === 'tool_use' ||
-                                  !finishReason;
-          
-          if (shouldContinue && stepCount < maxSteps) {
-            console.log(`[OCIModelAdapter] Tool calls completed, continuing to let model process results (step ${stepCount}/${maxSteps})`);
-            // The tool results are already added to currentMessages, so the next iteration
-            // will send them to the model
-            continue;
+          // If the model said 'stop' after making tool calls AND produced text,
+          // it means the model considers the task complete after these tools.
+          // Respect that — don't force another iteration.
+          if (finishReason === 'stop' && stepText.trim().length > 0) {
+            console.log(`[OCIModelAdapter] Model signaled stop after tool calls with text, finishing`);
+            yield { type: 'finish', finishReason: 'stop' };
+            break;
           }
           
+          if (stepCount < maxSteps) {
+            console.log(`[OCIModelAdapter] Tool calls completed successfully, continuing (step ${stepCount}/${maxSteps})`);
+            continue;
+          }
+          // Hit max steps — emit finish
           yield { type: 'finish', finishReason: finishReason || 'stop' };
           break;
         }

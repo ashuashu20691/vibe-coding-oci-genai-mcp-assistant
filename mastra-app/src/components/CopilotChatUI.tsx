@@ -42,6 +42,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     setArtifact,
     updateArtifact,
     closePanel: closeArtifactsPanel,
+    openPanel: openArtifactsPanel,
     onUserModification: handleArtifactModification,
     restoreArtifact,
   } = useArtifacts();
@@ -131,7 +132,25 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         updatedAt: now,
       };
     } else if (visualization.html) {
-      // HTML-based visualizations (automatic_report, html, custom_dashboard, etc.)
+      // HTML dashboards — render as iframe in artifacts panel
+      // If we also have structured data, prefer native chart rendering
+      if (visualization.data && Array.isArray(visualization.data) && visualization.data.length > 0) {
+        // We have both HTML and data — use HTML for the rich dashboard experience
+        // but also store data for potential table/chart tab switching
+        return {
+          id: artifactId,
+          type: 'html',
+          title: visualization.title || 'Dashboard',
+          content: {
+            type: 'html',
+            html: visualization.html,
+          },
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+          metadata: { data: visualization.data },
+        };
+      }
       return {
         id: artifactId,
         type: 'html',
@@ -421,7 +440,19 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
-                  u[u.length - 1] = { ...l, content: l.content + p.content };
+                  // Append to flat content string (for persistence/fallback)
+                  const newContent = l.content + p.content;
+                  // Also append to contentParts for ordered rendering
+                  const parts = [...(l.contentParts || [])];
+                  const lastPart = parts[parts.length - 1];
+                  if (lastPart && lastPart.type === 'text') {
+                    // Extend the last text part
+                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.content };
+                  } else {
+                    // Start a new text part
+                    parts.push({ type: 'text', text: p.content });
+                  }
+                  u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
                 }
                 return u;
               });
@@ -431,8 +462,11 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
-                  const toolCalls = l.toolCalls || [];
-                  u[u.length - 1] = { ...l, toolCalls: [...toolCalls, p.toolCall] };
+                  const toolCalls = [...(l.toolCalls || []), p.toolCall];
+                  // Append tool to contentParts for ordered rendering
+                  const parts = [...(l.contentParts || [])];
+                  parts.push({ type: 'tool', toolCall: p.toolCall });
+                  u[u.length - 1] = { ...l, toolCalls, contentParts: parts };
                 }
                 return u;
               });
@@ -441,7 +475,15 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
-                  u[u.length - 1] = { ...l, content: l.content + p.tool_narrative };
+                  const newContent = l.content + p.tool_narrative;
+                  const parts = [...(l.contentParts || [])];
+                  const lastPart = parts[parts.length - 1];
+                  if (lastPart && lastPart.type === 'text') {
+                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.tool_narrative };
+                  } else {
+                    parts.push({ type: 'text', text: p.tool_narrative });
+                  }
+                  u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
                 }
                 return u;
               });
@@ -450,7 +492,15 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
-                  u[u.length - 1] = { ...l, content: l.content + p.adaptation };
+                  const newContent = l.content + p.adaptation;
+                  const parts = [...(l.contentParts || [])];
+                  const lastPart = parts[parts.length - 1];
+                  if (lastPart && lastPart.type === 'text') {
+                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.adaptation };
+                  } else {
+                    parts.push({ type: 'text', text: p.adaptation });
+                  }
+                  u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
                 }
                 return u;
               });
@@ -459,9 +509,19 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
+                  const newContent = l.content + p.progress;
+                  // Also append to contentParts for ordered rendering
+                  const parts = [...(l.contentParts || [])];
+                  const lastPart = parts[parts.length - 1];
+                  if (lastPart && lastPart.type === 'text') {
+                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.progress };
+                  } else {
+                    parts.push({ type: 'text', text: p.progress });
+                  }
                   u[u.length - 1] = { 
                     ...l, 
-                    content: l.content + p.progress,
+                    content: newContent,
+                    contentParts: parts,
                     progress: p.step,
                     isProgressMessage: true
                   };
@@ -473,30 +533,53 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 const u = [...prev];
                 const l = u[u.length - 1];
                 if (l?.role === 'assistant') {
-                  u[u.length - 1] = { ...l, content: l.content + p.thinking };
+                  const newContent = l.content + p.thinking;
+                  const parts = [...(l.contentParts || [])];
+                  const lastPart = parts[parts.length - 1];
+                  if (lastPart && lastPart.type === 'text') {
+                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.thinking };
+                  } else {
+                    parts.push({ type: 'text', text: p.thinking });
+                  }
+                  u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
                 }
                 return u;
               });
             } else if (p.visualization) {
-              setMessages((prev) => {
-                const u = [...prev];
-                const l = u[u.length - 1];
-                if (l?.role === 'assistant') {
-                  // Check if visualization should route to artifacts panel (Requirement 15.2)
-                  if (shouldRouteToArtifactsPanel(p.visualization)) {
-                    // Route to artifacts panel
-                    const newArtifact = createArtifactFromVisualization(p.visualization);
-                    if (newArtifact) {
-                      setArtifact(newArtifact, conversationId);
-                    }
-                    // Don't add visualization to message, just keep the narrative
-                  } else {
-                    // Small visualization - keep inline in message
+              // Route visualization to either inline or artifacts panel
+              const routeToArtifacts = shouldRouteToArtifactsPanel(p.visualization);
+              
+              if (routeToArtifacts) {
+                // Route to artifacts panel (Claude Desktop right-side panel)
+                const newArtifact = createArtifactFromVisualization(p.visualization);
+                if (newArtifact) {
+                  setArtifact(newArtifact, conversationId);
+                }
+                // Also keep a lightweight reference in the message so user knows a viz was generated
+                setMessages((prev) => {
+                  const u = [...prev];
+                  const l = u[u.length - 1];
+                  if (l?.role === 'assistant') {
+                    // Don't store the full HTML or data in the message — just a marker with routedToArtifacts flag
+                    u[u.length - 1] = { ...l, visualization: { 
+                      type: p.visualization.type, 
+                      title: p.visualization.title,
+                      routedToArtifacts: true,
+                    }};
+                  }
+                  return u;
+                });
+              } else {
+                // Small visualization - keep inline in message
+                setMessages((prev) => {
+                  const u = [...prev];
+                  const l = u[u.length - 1];
+                  if (l?.role === 'assistant') {
                     u[u.length - 1] = { ...l, visualization: p.visualization };
                   }
-                }
-                return u;
-              });
+                  return u;
+                });
+              }
             } else if (p.analysis) {
               setMessages((prev) => {
                 const u = [...prev];
@@ -706,6 +789,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         isLoading={isLoading}
         isStreaming={isLastMessageStreaming}
         onSuggestionClick={setInput}
+        onViewArtifact={openArtifactsPanel}
       />
 
       {/* Working Badge - displayed during autonomous iteration loops */}

@@ -312,7 +312,17 @@ export class OCIGenAIProvider {
     let lastToolCalls: ToolCall[] = [];
 
     for (const msg of messages) {
-      if (msg.role === 'user') {
+      if (msg.role === 'system') {
+        // System messages (e.g., error retry context) are injected as USER messages
+        // since Cohere chat history doesn't have a system role (uses preamble instead)
+        if (currentMessage) {
+          chatHistory.push({
+            role: 'USER',
+            message: currentMessage,
+          } as GenerativeAiInference.models.CohereUserMessage);
+        }
+        currentMessage = msg.content || '';
+      } else if (msg.role === 'user') {
         // If we have a pending user message, add it first
         if (currentMessage) {
           chatHistory.push({
@@ -351,11 +361,33 @@ export class OCIGenAIProvider {
           }
         }
 
+        // Extract and truncate tool result content.
+        // MCP tools return { content: [{ text: '...', type: 'text' }] } — extract the text.
+        // Truncate to 2000 chars to avoid Cohere API token limits.
+        let resultContent = msg.content || 'No result';
+        try {
+          const parsed = JSON.parse(resultContent);
+          // Unwrap MCP content array: { content: [{ text: '...' }] }
+          if (parsed?.content?.[0]?.text) {
+            resultContent = parsed.content[0].text;
+          } else if (parsed?.result?.content?.[0]?.text) {
+            resultContent = parsed.result.content[0].text;
+          } else if (typeof parsed === 'object') {
+            resultContent = JSON.stringify(parsed);
+          }
+        } catch {
+          // Not JSON, use as-is
+        }
+        // Truncate to prevent token overflow
+        if (resultContent.length > 2000) {
+          resultContent = resultContent.slice(0, 2000) + '\n... (truncated)';
+        }
+
         toolResults.push({
           call: {
             name: toolName,
           } as GenerativeAiInference.models.CohereToolCall,
-          outputs: [{ result: msg.content || 'No result' }],
+          outputs: [{ result: resultContent }],
         } as GenerativeAiInference.models.CohereToolResult);
       }
     }
@@ -559,7 +591,19 @@ export class OCIGenAIProvider {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
       
-      if (msg.role === 'user') {
+      if (msg.role === 'system') {
+        // System messages (e.g., error retry context) are injected as USER messages
+        // since the generic format uses SYSTEM only for the preamble
+        genericMessages.push({
+          role: 'USER',
+          content: [
+            {
+              type: 'TEXT',
+              text: msg.content || '',
+            } as GenerativeAiInference.models.TextContent,
+          ],
+        } as GenerativeAiInference.models.UserMessage);
+      } else if (msg.role === 'user') {
         genericMessages.push({
           role: 'USER',
           content: [
@@ -916,7 +960,7 @@ export class OCIGenAIProvider {
    * @param tools - Optional list of available tools
    * @yields StreamChunk objects containing response content or tool calls
    */
-  async *streamChat(messages: ChatMessage[], modelId: string, tools?: Tool[]): AsyncGenerator<StreamChunk> {
+  async *streamChat(messages: ChatMessage[], modelId: string, tools?: Tool[], maxTokens?: number): AsyncGenerator<StreamChunk> {
     const client = await this.getClient();
     const apiFormat = this.getApiFormat(modelId);
 
@@ -940,7 +984,7 @@ export class OCIGenAIProvider {
           apiFormat: 'COHERE',
           chatHistory: chatHistory.length > 0 ? chatHistory : undefined,
           isStream: useStream,
-          maxTokens: 700,
+          maxTokens: maxTokens || 2000,
           temperature: 0,
           message: '',
         } as GenerativeAiInference.models.CohereChatRequest;

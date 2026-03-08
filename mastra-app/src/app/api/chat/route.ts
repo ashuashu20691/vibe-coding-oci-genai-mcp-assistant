@@ -72,6 +72,31 @@ function extractDataFromToolResult(result: unknown): Record<string, unknown>[] |
 
   try {
     const text = resultObj.content[0].text.trim();
+
+    // Reject non-data tool results: connection confirmations, status messages, errors.
+    // These are prose/markdown responses from sqlcl_connect, sqlcl_disconnect, etc.
+    // We only want to extract data from sqlcl_run_sql results that contain actual rows.
+    const isStatusMessage =
+      text.startsWith('###') ||                          // ### DATABASE CONNECTION ESTABLISHED ###
+      text.startsWith('**') ||                           // **bold** markdown status
+      text.startsWith('Successfully connected') ||
+      text.startsWith('Connected to') ||
+      text.startsWith('Disconnected') ||
+      text.startsWith('Error') ||
+      text.startsWith('ORA-') ||
+      text.startsWith('Connection') ||
+      text.includes('Successfully connected') ||
+      text.includes('CONNECTION ESTABLISHED') ||
+      text.includes('connection established') ||
+      // Short prose responses (< 5 lines) that aren't JSON or CSV
+      (text.split('\n').filter(l => l.trim()).length <= 4 &&
+        !text.startsWith('[') &&
+        !text.startsWith('{') &&
+        !text.includes(','));  // no commas = not CSV
+    if (isStatusMessage) {
+      console.log('[extractDataFromToolResult] Skipping status/connection message');
+      return null;
+    }
     
     // Try JSON parse first (SQLcl MCP often returns JSON)
     if (text.startsWith('[') || text.startsWith('{')) {
@@ -637,7 +662,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     // Create ChatService with narrative integration
     const chatService = createChatService(modelAdapter, narrativeService, {
       systemPrompt: systemInstructions,
-      maxIterations: 5,
+      maxIterations: 12,
     });
 
     const stream = new ReadableStream({
@@ -904,50 +929,53 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                     )
                   );
 
-                  // Auto-generate visualization for SQL results
-                  const data = extractDataFromToolResult(event.result.content);
-                  console.log(`[chat/POST] extractDataFromToolResult result: ${data ? data.length + ' rows, cols: ' + Object.keys(data[0] || {}).join(',') : 'null'}`);
+                  // Cache SQL query data for on-demand visualization
+                  // The agent autonomously decides when to visualize — we don't auto-generate charts
+                  const isSqlQuery = toolCall?.name === 'sqlcl_run_sql';
+                  const data = isSqlQuery ? extractDataFromToolResult(event.result.content) : null;
+                  console.log(`[chat/POST] extractDataFromToolResult result: ${data ? data.length + ' rows, cols: ' + Object.keys(data[0] || {}).join(',') : 'null'} (tool: ${toolCall?.name})`);
                   if (data && data.length > 0) {
                     lastQueryData = data;
-                    // Cache data per conversation for visualization requests
                     conversationDataCache.set(conversationId || 'default', data);
                     console.log(`[chat/POST] Cached ${data.length} rows for conversation ${conversationId || 'default'}`);
-                    
-                    // Generate visualization directly — skip the complex report pipeline
-                    try {
-                      const analysis = analyzeData({ data, query: 'SQL query' });
-                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ analysis })}\n\n`));
 
-                      let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
-                      let vizTitle = 'Query Results';
-                      if (userIntent.visualizationType) {
-                        switch (userIntent.visualizationType) {
-                          case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
-                          case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
-                          case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
-                          case 'dashboard': vizType = 'html'; vizTitle = 'Dashboard'; break;
+                    // Generate visualization only when the user explicitly requested one
+                    // (dashboard, chart, graph, visual, etc.) — not on every SQL result
+                    if (isVisualizationRequest) {
+                      try {
+                        const analysis = analyzeData({ data, query: 'SQL query' });
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ analysis })}\n\n`));
+
+                        let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
+                        let vizTitle = 'Query Results';
+                        if (userIntent.visualizationType) {
+                          switch (userIntent.visualizationType) {
+                            case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
+                            case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
+                            case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
+                            case 'dashboard': vizType = 'html'; vizTitle = 'Dashboard'; break;
+                          }
                         }
-                      }
-                      // If user asked for dashboard, use html type
-                      if (lastUserMessage.includes('dashboard')) {
-                        vizType = 'html';
-                        vizTitle = 'Sales Dashboard';
-                      }
+                        if (lastUserMessage.includes('dashboard')) {
+                          vizType = 'html';
+                          vizTitle = 'Data Dashboard';
+                        }
 
-                      const viz = await generateVisualization({ data, type: vizType, title: vizTitle });
-                      console.log(`[chat/POST] Generated ${viz.type} visualization, content type: ${typeof viz.content}`);
+                        const viz = await generateVisualization({ data, type: vizType, title: vizTitle });
+                        console.log(`[chat/POST] Generated ${viz.type} visualization`);
 
-                      const visualizationData: Record<string, unknown> = { type: viz.type, title: vizTitle };
-                      if (typeof viz.content === 'string') {
-                        visualizationData.html = viz.content;
-                      } else if (typeof viz.content === 'object' && viz.content !== null) {
-                        Object.assign(visualizationData, viz.content);
+                        const visualizationData: Record<string, unknown> = { type: viz.type, title: vizTitle };
+                        if (typeof viz.content === 'string') {
+                          visualizationData.html = viz.content;
+                        } else if (typeof viz.content === 'object' && viz.content !== null) {
+                          Object.assign(visualizationData, viz.content);
+                        }
+                        visualizationData.data = data;
+
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
+                      } catch (vizError) {
+                        console.error('[chat/POST] Visualization error:', vizError);
                       }
-
-                      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
-                      console.log(`[chat/POST] Sent visualization SSE event`);
-                    } catch (vizError) {
-                      console.error('[chat/POST] Visualization error:', vizError);
                     }
                   }
                   

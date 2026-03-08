@@ -35,11 +35,21 @@ export interface Message {
   timestamp: Date;
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  /** 
+   * Ordered sequence of text and tool-call segments for Claude Desktop-style rendering.
+   * Preserves the interleaving order: text → tool → text → tool → text
+   */
+  contentParts?: Array<
+    | { type: 'text'; text: string }
+    | { type: 'tool'; toolCall: ToolCall }
+  >;
   visualization?: {
     type: string;
     html?: string;
     title?: string;
     data?: Record<string, unknown>[];
+    /** Flag indicating this visualization was routed to the artifacts panel */
+    routedToArtifacts?: boolean;
   };
   analysis?: {
     summary?: string;

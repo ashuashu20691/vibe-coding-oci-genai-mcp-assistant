@@ -65,6 +65,7 @@ export function ArtifactsPanel({ artifact, onClose, onUserModification }: Artifa
   const [panelWidth, setPanelWidth] = useState(40); // Default 40% width
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [previousVersion, setPreviousVersion] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'chart' | 'data'>('chart');
   const panelRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -81,6 +82,8 @@ export function ArtifactsPanel({ artifact, onClose, onUserModification }: Artifa
     if (artifact) {
       setPreviousVersion(artifact.version);
     }
+    // Reset to chart tab when artifact changes
+    setActiveTab('chart');
   }, [artifact?.version, previousVersion, artifact]);
 
   // Hide panel when no artifacts active (Requirement 15.7)
@@ -186,9 +189,12 @@ export function ArtifactsPanel({ artifact, onClose, onUserModification }: Artifa
             throw new Error('HTML content must be a string');
           }
           return (
-            <div 
-              className="h-full overflow-auto p-4"
-              dangerouslySetInnerHTML={{ __html: content.html }}
+            <iframe
+              srcDoc={content.html}
+              className="w-full h-full border-none"
+              style={{ minHeight: '500px' }}
+              sandbox="allow-scripts allow-same-origin"
+              title={artifact.title}
             />
           );
 
@@ -293,44 +299,65 @@ export function ArtifactsPanel({ artifact, onClose, onUserModification }: Artifa
         style={{ width: `${panelWidth}%` }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
-              {artifact.title}
-            </h2>
-            <div className="flex items-center gap-2">
-              <p className={`
-                text-xs text-gray-500 dark:text-gray-400 transition-all duration-300
-                ${isTransitioning ? 'text-blue-500 dark:text-blue-400 font-medium' : ''}
-              `}>
-                Version {artifact.version} • Updated {artifact.updatedAt.toLocaleTimeString()}
-              </p>
-              {isTransitioning && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 animate-pulse">
-                  Updating...
-                </span>
-              )}
+        <div className="border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex-1 min-w-0">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 truncate">
+                {artifact.title}
+              </h2>
+              <div className="flex items-center gap-2">
+                <p className={`
+                  text-xs text-gray-500 dark:text-gray-400 transition-all duration-300
+                  ${isTransitioning ? 'text-blue-500 dark:text-blue-400 font-medium' : ''}
+                `}>
+                  Version {artifact.version} • Updated {artifact.updatedAt.toLocaleTimeString()}
+                </p>
+                {isTransitioning && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 animate-pulse">
+                    Updating...
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="ml-4 p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            aria-label="Close artifacts panel"
-          >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+            <button
+              onClick={onClose}
+              className="ml-4 p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              aria-label="Close artifacts panel"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </button>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {/* Tabs — Claude Desktop style */}
+          {(artifact.metadata?.data || artifact.content.type === 'table') && (
+            <div className="flex px-4 gap-1" role="tablist">
+              <button
+                role="tab"
+                aria-selected={activeTab === 'chart'}
+                onClick={() => setActiveTab('chart')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-t-md transition-colors ${
+                  activeTab === 'chart'
+                    ? 'bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 border border-b-0 border-gray-200 dark:border-gray-700'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                📊 Charts
+              </button>
+              <button
+                role="tab"
+                aria-selected={activeTab === 'data'}
+                onClick={() => setActiveTab('data')}
+                className={`px-3 py-1.5 text-sm font-medium rounded-t-md transition-colors ${
+                  activeTab === 'data'
+                    ? 'bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 border border-b-0 border-gray-200 dark:border-gray-700'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                }`}
+              >
+                📋 Data
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Content */}
@@ -341,7 +368,18 @@ export function ArtifactsPanel({ artifact, onClose, onUserModification }: Artifa
             ${isTransitioning ? 'opacity-50' : 'opacity-100'}
           `}
         >
-          {renderArtifactContent()}
+          {activeTab === 'data' && artifact.metadata?.data ? (
+            <div className="h-full overflow-auto">
+              <DataTable 
+                data={artifact.metadata.data as Record<string, unknown>[]} 
+                title={artifact.title}
+                fullscreenEnabled
+                exportEnabled
+              />
+            </div>
+          ) : (
+            renderArtifactContent()
+          )}
         </div>
       </div>
     </>

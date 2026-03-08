@@ -13,6 +13,7 @@ export interface UseArtifactsReturn {
   setArtifact: (artifact: Artifact | null, conversationId?: string | null) => void;
   updateArtifact: (updates: Partial<Artifact>, conversationId?: string | null) => void;
   closePanel: () => void;
+  openPanel: () => void;
   onUserModification: (modification: Omit<ArtifactModification, 'timestamp'>) => void;
   restoreArtifact: (artifact: Artifact | null) => void;
 }
@@ -61,6 +62,12 @@ export function useArtifacts(): UseArtifactsReturn {
     // Keep artifact in state for potential re-opening
   }, []);
 
+  const openPanel = useCallback(() => {
+    if (artifact) {
+      setIsOpen(true);
+    }
+  }, [artifact]);
+
   const onUserModification = useCallback((modification: Omit<ArtifactModification, 'timestamp'>) => {
     // This will be called when user interacts with artifact
     // The parent component can listen to this and send acknowledgment to chat
@@ -102,6 +109,7 @@ export function useArtifacts(): UseArtifactsReturn {
     setArtifact,
     updateArtifact,
     closePanel,
+    openPanel,
     onUserModification,
     restoreArtifact,
   };

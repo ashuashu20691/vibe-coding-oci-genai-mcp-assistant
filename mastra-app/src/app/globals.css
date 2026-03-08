@@ -1289,12 +1289,11 @@ pre::-webkit-scrollbar-thumb:hover,
   
   /* Tool execution desktop adjustments */
   .tool-execution {
-    padding: var(--spacing-desktop) var(--spacing-desktop-large);
-    margin-bottom: var(--spacing-desktop);
+    padding: 4px 10px;
   }
   
   .tool-header {
-    padding: var(--spacing-desktop) 0;
+    padding: 0;
   }
   
   /* Database selector desktop adjustments */
@@ -1535,13 +1534,12 @@ pre::-webkit-scrollbar-thumb:hover,
   
   /* Tool execution tablet adjustments */
   .tool-execution {
-    padding: 1rem 1.25rem; /* Tablet scale spacing */
-    margin-bottom: 1rem; /* Tablet scale spacing */
+    padding: 4px 10px;
   }
   
   .tool-header {
-    min-height: var(--touch-target-min); /* Maintain 44px touch targets */
-    padding: 0.75rem 0; /* Tablet scale spacing */
+    min-height: var(--touch-target-min);
+    padding: 0;
   }
   
   /* Database selector tablet adjustments */
@@ -1798,13 +1796,12 @@ pre::-webkit-scrollbar-thumb:hover,
   
   /* Tool execution mobile adjustments */
   .tool-execution {
-    padding: 0.75rem 1rem; /* Mobile scale spacing */
-    margin-bottom: 0.75rem; /* Mobile scale spacing */
+    padding: 4px 8px;
   }
   
   .tool-header {
     min-height: var(--touch-target-min);
-    padding: 0.5rem 0; /* Mobile scale spacing */
+    padding: 0;
   }
   
   /* Database selector mobile adjustments */
@@ -2585,35 +2582,41 @@ pre::-webkit-scrollbar-thumb:hover,
 }
 
 /* Tool Execution Display - Task 9: Chevron rotation animation */
+/* Claude Desktop-style compact tool pill */
 .tool-execution {
-  padding: 10px 14px;
-  border-radius: 6px;
-  margin-bottom: var(--spacing-message-gap);
-  box-shadow: var(--shadow-tool);
-  transition: all 0.2s ease;
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  transition: all 0.15s ease;
+  max-width: 100%;
 }
 
 .tool-executing {
-  background-color: var(--color-tool-executing);
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.06);
 }
 
 .tool-completed {
-  background-color: var(--color-tool-completed);
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
 }
 
 .tool-failed {
-  background-color: var(--color-tool-failed);
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.06);
 }
 
 .tool-pending {
-  background-color: var(--color-system-message-bg);
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
 }
 
 .tool-header {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
+  gap: 6px;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -2621,22 +2624,25 @@ pre::-webkit-scrollbar-thumb:hover,
   padding: 0;
   text-align: left;
   transition: opacity 0.15s ease;
+  white-space: nowrap;
 }
 
 .tool-header:hover {
-  opacity: 0.8;
+  opacity: 0.7;
 }
 
 .tool-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-tool-text);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .tool-status {
-  font-size: 12px;
-  color: var(--color-tool-status);
-  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 2px;
+  display: flex;
+  align-items: center;
 }
 
 /* Chevron Rotation Animation - Requirement 13.2 */
@@ -2652,13 +2658,14 @@ pre::-webkit-scrollbar-thumb:hover,
 }
 
 .tool-details {
-  margin-top: 8px;
-  padding: 12px;
+  margin-top: 6px;
+  padding: 10px;
   background-color: var(--color-code-bg);
   border: 1px solid var(--color-code-border);
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: var(--font-family-mono);
-  font-size: 13px;
+  font-size: 12px;
+  width: 100%;
   overflow-x: auto;
   color: var(--color-tool-text);
   animation: slideDown 0.2s ease;
@@ -2934,11 +2941,11 @@ pre::-webkit-scrollbar-thumb:hover,
 
 .status-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  margin-right: 8px;
-  transition: background-color 0.2s ease, transform 0.2s ease;
+  margin-right: 4px;
+  transition: background-color 0.2s ease;
 }
 
 .status-connected {
@@ -3036,15 +3043,18 @@ pre::-webkit-scrollbar-thumb:hover,
 
 /* Dark Mode Overrides for Component Styles */
 :root.dark .tool-execution.tool-executing {
-  background-color: var(--color-tool-executing);
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
 }
 
 :root.dark .tool-execution.tool-completed {
-  background-color: var(--color-tool-completed);
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
 }
 
 :root.dark .tool-execution.tool-failed {
-  background-color: var(--color-tool-failed);
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 :root.dark .model-selector-compact {
