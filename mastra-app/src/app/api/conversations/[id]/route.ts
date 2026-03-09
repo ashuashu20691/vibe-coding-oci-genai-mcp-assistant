@@ -94,7 +94,23 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     console.log('[API] Conversation ID:', id);
     console.log('[API] Messages retrieved:', messages.length);
-    console.log('[API] Messages:', JSON.stringify(messages, null, 2));
+    
+    // Log each message with its fields
+    messages.forEach((msg, idx) => {
+      console.log(`[API] Message ${idx}:`, {
+        id: msg.id,
+        role: msg.role,
+        contentLength: msg.content?.length || 0,
+        hasVisualization: !!msg.visualization,
+        visualizationType: msg.visualization?.type,
+        visualizationRoutedToArtifacts: msg.visualization?.routedToArtifacts,
+      });
+      if (msg.visualization) {
+        console.log(`[API] Message ${idx} visualization:`, JSON.stringify(msg.visualization));
+      }
+    });
+    
+    console.log('[API] Full messages JSON:', JSON.stringify(messages, null, 2));
 
     return NextResponse.json({
       ...conversation,

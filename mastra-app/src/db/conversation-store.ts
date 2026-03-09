@@ -147,6 +147,9 @@ export class ConversationStore {
       await initializePool(this.config);
       this.initialized = true;
       
+      // Create tables if they don't exist
+      await this.createTablesIfNeeded();
+      
       // Try to add visualization column if it doesn't exist
       try {
         await executeStatement(
@@ -155,12 +158,93 @@ export class ConversationStore {
         console.log('[ConversationStore] Added visualization column to messages table');
       } catch (e) {
         // Column already exists or table doesn't exist — both are fine
+        const errMsg = e instanceof Error ? e.message : String(e);
+        if (errMsg.includes('ORA-01430') || errMsg.includes('already exists')) {
+          console.log('[ConversationStore] Visualization column already exists');
+        } else if (errMsg.includes('ORA-00942') || errMsg.includes('table or view does not exist')) {
+          console.log('[ConversationStore] Messages table does not exist yet - will be created later');
+        } else {
+          console.warn('[ConversationStore] Failed to add visualization column:', errMsg);
+        }
       }
     } catch (error) {
       throw new DBConnectionError(
         `Failed to initialize Oracle connection: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
+    }
+  }
+  
+  /**
+   * Create tables if they don't exist
+   */
+  private async createTablesIfNeeded(): Promise<void> {
+    try {
+      // Create conversations table
+      await executeStatement(`
+        CREATE TABLE conversations (
+          id VARCHAR2(36) PRIMARY KEY,
+          title VARCHAR2(500) NOT NULL,
+          model_id VARCHAR2(200),
+          active_artifact CLOB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('[ConversationStore] Created conversations table');
+    } catch (e: any) {
+      if (e.message?.includes('ORA-00955') || e.message?.includes('name is already used')) {
+        console.log('[ConversationStore] Conversations table already exists');
+      } else {
+        console.warn('[ConversationStore] Could not create conversations table:', e.message);
+      }
+    }
+    
+    try {
+      // Create messages table with all columns
+      await executeStatement(`
+        CREATE TABLE messages (
+          id VARCHAR2(36) PRIMARY KEY,
+          conversation_id VARCHAR2(36) NOT NULL,
+          role VARCHAR2(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+          content CLOB,
+          tool_calls CLOB,
+          tool_call_id VARCHAR2(100),
+          tool_narratives CLOB,
+          adaptation_narratives CLOB,
+          visualization CLOB,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT fk_conversation 
+            FOREIGN KEY (conversation_id) 
+            REFERENCES conversations(id) 
+            ON DELETE CASCADE
+        )
+      `);
+      console.log('[ConversationStore] Created messages table');
+    } catch (e: any) {
+      if (e.message?.includes('ORA-00955') || e.message?.includes('name is already used')) {
+        console.log('[ConversationStore] Messages table already exists');
+      } else {
+        console.warn('[ConversationStore] Could not create messages table:', e.message);
+      }
+    }
+    
+    try {
+      await executeStatement(`CREATE INDEX idx_messages_conversation ON messages(conversation_id)`);
+      console.log('[ConversationStore] Created idx_messages_conversation');
+    } catch (e: any) {
+      if (e.message?.includes('ORA-00955') || e.message?.includes('name is already used')) {
+        // Index already exists
+      }
+    }
+    
+    try {
+      await executeStatement(`CREATE INDEX idx_conversations_updated ON conversations(updated_at DESC)`);
+      console.log('[ConversationStore] Created idx_conversations_updated');
+    } catch (e: any) {
+      if (e.message?.includes('ORA-00955') || e.message?.includes('name is already used')) {
+        // Index already exists
+      }
     }
   }
 
@@ -537,6 +621,8 @@ export class ConversationStore {
     const toolNarrativesJson = message.toolNarratives ? JSON.stringify(message.toolNarratives) : null;
     const adaptationNarrativesJson = message.adaptationNarratives ? JSON.stringify(message.adaptationNarratives) : null;
     const visualizationJson = message.visualization ? JSON.stringify(message.visualization) : null;
+    
+    console.log(`[addMessage] Saving message ${id} with visualization:`, visualizationJson ? visualizationJson.substring(0, 200) + '...' : 'NULL');
 
     try {
       // Try with all columns first (including visualization)
@@ -556,9 +642,11 @@ export class ConversationStore {
             visualization: visualizationJson,
           }
         );
+        console.log(`[addMessage] Successfully inserted message ${id} with all columns including visualization`);
       } catch (error) {
         // Fallback: try without visualization column
         if (error instanceof Error && error.message.includes('ORA-00904')) {
+          console.warn(`[addMessage] Visualization column doesn't exist, trying without it`);
           try {
             await executeStatement(
               `INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_call_id, tool_narratives, adaptation_narratives, created_at)
@@ -704,8 +792,10 @@ export class ConversationStore {
         if (visualizationStr) {
           try {
             visualization = JSON.parse(visualizationStr);
+            console.log(`[getMessages] Parsed visualization for message ${row.ID}:`, visualization);
           } catch {
             // Invalid JSON, leave as undefined
+            console.log(`[getMessages] Failed to parse visualization for message ${row.ID}`);
           }
         }
 

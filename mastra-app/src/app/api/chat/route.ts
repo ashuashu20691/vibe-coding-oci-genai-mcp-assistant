@@ -720,6 +720,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
 
         // If user wants visualization and we have existing data, generate it directly (bypass AI)
         if (isVisualizationRequest && existingData && existingData.length > 0) {
+          console.log('[chat/POST] Taking bypass AI path - generating visualization from cached data');
           let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
           let vizTitle = 'Data Visualization';
 
@@ -749,10 +750,43 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
               Object.assign(visualizationData, viz.content);
             }
             
+            lastVisualization = visualizationData;
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
+            
+            // Save message before closing stream
+            fullResponse = `Here's your ${vizTitle}:`;
+            if (conversationId && conversationStore) {
+              try {
+                const htmlLength = typeof visualizationData.html === 'string' ? visualizationData.html.length : 0;
+                let vizToSave: { type: string; title?: string; html?: string; data?: Record<string, unknown>[]; routedToArtifacts?: boolean } | undefined;
+                if (htmlLength > 500) {
+                  vizToSave = {
+                    type: String(visualizationData.type || 'custom_dashboard'),
+                    title: visualizationData.title ? String(visualizationData.title) : undefined,
+                    routedToArtifacts: true,
+                  };
+                } else {
+                  vizToSave = {
+                    type: String(visualizationData.type || 'unknown'),
+                    title: visualizationData.title ? String(visualizationData.title) : undefined,
+                    html: typeof visualizationData.html === 'string' ? visualizationData.html as string : undefined,
+                    data: Array.isArray(visualizationData.data) ? visualizationData.data as Record<string, unknown>[] : undefined,
+                  };
+                }
+                await conversationStore.addMessage(conversationId, {
+                  role: 'assistant',
+                  content: fullResponse,
+                  timestamp: new Date(),
+                  visualization: vizToSave,
+                });
+                console.log(`[chat/bypass] Saved assistant message with visualization (bypass AI path)`);
+              } catch (e) {
+                console.error('[chat/bypass] Failed to save message:', e);
+              }
+            }
+            
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
             controller.close();
-            // Note: lastVisualization not needed here since we close the stream immediately
             return;
           } catch (vizError) {
             console.error('[chat/POST] Direct visualization error:', vizError);
@@ -764,6 +798,21 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
         if (clarificationPrompt && !messages.some(m => m.role === 'assistant' && (m.content?.includes('What data') || m.content?.includes('What type')))) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: clarificationPrompt })}\n\n`));
           fullResponse = clarificationPrompt;
+          
+          // Save clarification message before closing
+          if (conversationId && conversationStore) {
+            try {
+              await conversationStore.addMessage(conversationId, {
+                role: 'assistant',
+                content: fullResponse,
+                timestamp: new Date(),
+              });
+              console.log(`[chat/clarification] Saved clarification message`);
+            } catch (e) {
+              console.error('[chat/clarification] Failed to save message:', e);
+            }
+          }
+          
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
           controller.close();
           return;
@@ -1086,17 +1135,23 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           // Save assistant message to database
           if (conversationId && fullResponse && conversationStore) {
             try {
+              console.log(`[chat/saveMessage] About to save message. lastVisualization:`, lastVisualization ? 'SET' : 'NULL');
+              
               // If visualization has large HTML (>500 chars), save only a lightweight marker.
               // The full artifact is already persisted separately via /api/conversations/[id]/artifact.
               // This prevents bloating the messages table with huge HTML blobs.
               let vizToSave: { type: string; title?: string; html?: string; data?: Record<string, unknown>[]; routedToArtifacts?: boolean } | undefined;
               if (lastVisualization) {
-                if (typeof lastVisualization.html === 'string' && (lastVisualization.html as string).length > 500) {
+                const htmlLength = typeof lastVisualization.html === 'string' ? lastVisualization.html.length : 0;
+                console.log(`[chat/saveMessage] lastVisualization HTML length: ${htmlLength}`);
+                
+                if (htmlLength > 500) {
                   vizToSave = {
                     type: String(lastVisualization.type || 'custom_dashboard'),
                     title: lastVisualization.title ? String(lastVisualization.title) : undefined,
                     routedToArtifacts: true,
                   };
+                  console.log(`[chat/saveMessage] Saving lightweight marker (HTML > 500):`, vizToSave);
                 } else {
                   vizToSave = {
                     type: String(lastVisualization.type || 'unknown'),
@@ -1104,7 +1159,10 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                     html: typeof lastVisualization.html === 'string' ? lastVisualization.html : undefined,
                     data: Array.isArray(lastVisualization.data) ? lastVisualization.data as Record<string, unknown>[] : undefined,
                   };
+                  console.log(`[chat/saveMessage] Saving full visualization (HTML <= 500):`, { ...vizToSave, html: vizToSave.html ? `${vizToSave.html.substring(0, 50)}...` : undefined });
                 }
+              } else {
+                console.log(`[chat/saveMessage] No lastVisualization to save`);
               }
               // We track visualization in the stream — save it with the message
               await conversationStore.addMessage(conversationId, {

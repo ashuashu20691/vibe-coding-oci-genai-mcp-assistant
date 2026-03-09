@@ -258,19 +258,25 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           visualization?: unknown;
           analysis?: unknown;
           toolErrors?: unknown;
-        }): UIMessage => ({
-          id: m.id,
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
-          toolCalls: m.toolCalls as Message['toolCalls'],
-          toolCallId: m.toolCallId,
-          toolNarratives: m.toolNarratives as Message['toolNarratives'],
-          adaptationNarratives: m.adaptationNarratives as Message['adaptationNarratives'],
-          visualization: m.visualization as Message['visualization'],
-          analysis: m.analysis as Message['analysis'],
-          toolErrors: m.toolErrors as Message['toolErrors'],
-        }));
+        }): UIMessage => {
+          const msg = {
+            id: m.id,
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+            toolCalls: m.toolCalls as Message['toolCalls'],
+            toolCallId: m.toolCallId,
+            toolNarratives: m.toolNarratives as Message['toolNarratives'],
+            adaptationNarratives: m.adaptationNarratives as Message['adaptationNarratives'],
+            visualization: m.visualization as Message['visualization'],
+            analysis: m.analysis as Message['analysis'],
+            toolErrors: m.toolErrors as Message['toolErrors'],
+          };
+          if (msg.visualization) {
+            console.log(`[loadConversation] Message ${msg.id} has visualization:`, msg.visualization);
+          }
+          return msg;
+        });
         
         console.log('[loadConversation] Processed messages:', processedMessages);
         setMessages(processedMessages);
