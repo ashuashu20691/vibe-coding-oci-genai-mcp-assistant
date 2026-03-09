@@ -1,0 +1,26 @@
+[Unit]
+Description=Mastra App - OCI GenAI Chat
+After=network.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/home/opc/mastra-app
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/opc/mastra-app/logs/app.log
+StandardError=append:/home/opc/mastra-app/logs/error.log
+
+# Restart on failure
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Resource limits
+MemoryLimit=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

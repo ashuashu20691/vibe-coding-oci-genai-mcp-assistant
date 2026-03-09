@@ -11,7 +11,13 @@
     "test:watch": "vitest",
     "test:unit": "vitest run __tests__/unit",
     "test:property": "vitest run __tests__/property",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop mastra-app",
+    "pm2:restart": "pm2 restart mastra-app",
+    "pm2:logs": "pm2 logs mastra-app",
+    "pm2:monit": "pm2 monit",
+    "healthcheck": "node healthcheck.js"
   },
   "dependencies": {
     "@mastra/core": "^1.2.0",
