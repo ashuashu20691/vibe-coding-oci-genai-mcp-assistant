@@ -662,7 +662,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     // Create ChatService with narrative integration
     const chatService = createChatService(modelAdapter, narrativeService, {
       systemPrompt: systemInstructions,
-      maxIterations: 12,
+      maxIterations: 5, // Reduced to prevent loops
     });
 
     const stream = new ReadableStream({
@@ -832,7 +832,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           const streamOptions = hasTools
             ? {
               toolsets: { sqlcl: mcpTools },
-              maxSteps: 15, // Increased for deep autonomous analysis
+              maxSteps: 8, // Increased to allow data generation (connect, schema, multiple INSERTs, query)
               onStepFinish: (step: { text: string; toolCalls: ToolCall[]; toolResults: Array<{ toolCallId: string; result: unknown }>; finishReason: string }) => {
                 console.log(`[chat] Step finished: ${step.toolCalls.length} tool calls, reason: ${step.finishReason}`);
 

@@ -8,11 +8,10 @@ User=opc
 WorkingDirectory=/home/opc/mastra-app
 Environment="NODE_ENV=production"
 Environment="PORT=3000"
+Environment="PATH=/usr/bin:/usr/local/bin"
 ExecStart=/usr/bin/npm start
 Restart=always
 RestartSec=10
-StandardOutput=append:/home/opc/mastra-app/logs/app.log
-StandardError=append:/home/opc/mastra-app/logs/error.log
 
 # Restart on failure
 StartLimitInterval=60
