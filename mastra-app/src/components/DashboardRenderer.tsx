@@ -1,5 +1,5 @@
 import React from 'react';
-import { Chart } from './Chart';
+import { Chart } from './ChartLazy'; // Use lazy-loaded version
 import { DataTable } from './DataTable';
 
 interface DashboardStat {

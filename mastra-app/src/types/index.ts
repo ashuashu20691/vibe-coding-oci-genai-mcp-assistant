@@ -28,6 +28,19 @@ export interface ToolError {
   details?: Record<string, unknown>;
 }
 
+/**
+ * File attachment metadata
+ * Validates: Requirements 3.5, 3.7, 3.8
+ */
+export interface FileAttachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  url: string;
+  uploadedAt: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -43,6 +56,11 @@ export interface Message {
     | { type: 'text'; text: string }
     | { type: 'tool'; toolCall: ToolCall }
   >;
+  /**
+   * File attachments associated with this message
+   * Validates: Requirements 3.5, 3.7, 3.8
+   */
+  attachments?: FileAttachment[];
   visualization?: {
     type: string;
     html?: string;

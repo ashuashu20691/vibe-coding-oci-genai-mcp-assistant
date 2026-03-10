@@ -1,14 +1,26 @@
 'use client';
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Conversation, Message, Artifact, ArtifactModification } from '@/types';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { Conversation, Message, Artifact, ArtifactModification, FileAttachment } from '@/types';
 import { MessageList } from './MessageList';
+import { MessageListAI } from './MessageListAI';
+import { MessageInputAI } from './ai-elements/MessageInputAI';
 import { WorkingBadge } from './WorkingBadge';
-import { ArtifactsPanel } from './ArtifactsPanel';
+import { ArtifactsPanel } from './ArtifactsPanelLazy'; // Use lazy-loaded version
 import { MainLayout } from './MainLayout';
 import { useArtifacts } from '@/hooks/useArtifacts';
 import { shouldRouteToArtifacts } from '@/utils/result-routing';
+import { featureFlags } from '@/lib/feature-flags';
+import { safeComponent } from '@/lib/component-mapper';
+import { createStreamingBuffer } from '@/utils/streaming-buffer';
 
 const DEFAULT_MODEL = 'google.gemini-2.5-flash';
+
+// Create safe MessageList component with feature flag support
+const SafeMessageList = safeComponent(
+  MessageListAI,
+  MessageList,
+  featureFlags.aiElementsMessages
+);
 
 interface UIMessage extends Message {
   progress?: { current: number; total: number };
@@ -34,6 +46,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
   const [availableModels, setAvailableModels] = useState<Array<{ id: string; name: string; description: string }>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fadeOutTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const streamingBufferRef = useRef<ReturnType<typeof createStreamingBuffer> | null>(null);
   
   // Artifacts state management (Requirement 15.2, 15.3, 15.5)
   const {
@@ -213,6 +226,19 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
       });
   }, []);
 
+  // Listen for swipe gesture to open sidebar (Requirement 14.6)
+  useEffect(() => {
+    const handleOpenSidebar = () => {
+      setSidebarOpen(true);
+    };
+
+    window.addEventListener('openSidebar', handleOpenSidebar);
+
+    return () => {
+      window.removeEventListener('openSidebar', handleOpenSidebar);
+    };
+  }, []);
+
   const fetchConversations = useCallback(() => {
     fetch('/api/conversations')
       .then((r) => (r.ok ? r.json() : []))
@@ -330,14 +356,19 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     }
   }, [conversationId]);
 
-  const sendMessage = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+  const sendMessage = useCallback(async (messageText?: string, messageAttachments?: FileAttachment[]) => {
+    const textToSend = messageText !== undefined ? messageText : input.trim();
+    const attachmentsToSend = messageAttachments || [];
+    
+    if (!textToSend && attachmentsToSend.length === 0) return;
+    if (isLoading) return;
     
     const userMsg: UIMessage = { 
       id: Date.now().toString(), 
       role: 'user', 
-      content: input.trim(),
-      timestamp: new Date()
+      content: textToSend,
+      timestamp: new Date(),
+      attachments: attachmentsToSend.length > 0 ? attachmentsToSend : undefined,
     };
     
     // Clear input field immediately on submit
@@ -352,6 +383,35 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     setMessages((p) => [...p, userMsg]);
     setIsLoading(true);
     setIterationState(null); // Reset iteration state on new message
+
+    // Create streaming buffer for content chunks - Validates: Requirement 9.2, 9.3
+    // Buffer small chunks to reduce re-renders (target: < 10ms chunk processing)
+    if (streamingBufferRef.current) {
+      streamingBufferRef.current.destroy();
+    }
+    
+    streamingBufferRef.current = createStreamingBuffer(
+      (bufferedContent) => {
+        // Flush buffered content to message
+        setMessages((prev) => {
+          const u = [...prev];
+          const l = u[u.length - 1];
+          if (l?.role === 'assistant') {
+            const newContent = l.content + bufferedContent;
+            const parts = [...(l.contentParts || [])];
+            const lastPart = parts[parts.length - 1];
+            if (lastPart && lastPart.type === 'text') {
+              parts[parts.length - 1] = { type: 'text', text: lastPart.text + bufferedContent };
+            } else {
+              parts.push({ type: 'text', text: bufferedContent });
+            }
+            u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
+          }
+          return u;
+        });
+      },
+      { flushInterval: 50, minChunkSize: 10 }
+    );
 
     // Create conversation if it doesn't exist
     let currentConversationId = conversationId;
@@ -388,6 +448,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           body: JSON.stringify({
             role: 'user',
             content: userMsg.content,
+            attachments: userMsg.attachments,
           }),
         });
       } catch (err) {
@@ -398,7 +459,12 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     try {
       const allMsgs = [...messages, userMsg]
         .filter((m) => m.role === 'user' || m.content.trim())
-        .map((m) => ({ id: m.id, role: m.role, content: m.content || '' }));
+        .map((m) => ({ 
+          id: m.id, 
+          role: m.role, 
+          content: m.content || '',
+          attachments: m.attachments,
+        }));
 
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -425,6 +491,10 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
 
       const dec = new TextDecoder();
       let buf = '';
+      
+      // Initialize streaming error handler - Validates: Requirement 11.4, 11.7
+      const { createStreamingErrorHandler } = await import('@/lib/streaming-error-handler');
+      const errorHandler = createStreamingErrorHandler();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -441,27 +511,35 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           try {
             const p = JSON.parse(d);
 
+            // Validate chunk structure - Validates: Requirement 11.4
+            if (!errorHandler.validateChunk(p)) {
+              // Invalid chunk, but continue processing - error already logged
+              continue;
+            }
+
             if (p.content) {
-              setMessages((prev) => {
-                const u = [...prev];
-                const l = u[u.length - 1];
-                if (l?.role === 'assistant') {
-                  // Append to flat content string (for persistence/fallback)
-                  const newContent = l.content + p.content;
-                  // Also append to contentParts for ordered rendering
-                  const parts = [...(l.contentParts || [])];
-                  const lastPart = parts[parts.length - 1];
-                  if (lastPart && lastPart.type === 'text') {
-                    // Extend the last text part
-                    parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.content };
-                  } else {
-                    // Start a new text part
-                    parts.push({ type: 'text', text: p.content });
+              // Use streaming buffer to reduce re-renders - Validates: Requirement 9.2, 9.3
+              if (streamingBufferRef.current) {
+                streamingBufferRef.current.add(p.content);
+              } else {
+                // Fallback to direct update if buffer not available
+                setMessages((prev) => {
+                  const u = [...prev];
+                  const l = u[u.length - 1];
+                  if (l?.role === 'assistant') {
+                    const newContent = l.content + p.content;
+                    const parts = [...(l.contentParts || [])];
+                    const lastPart = parts[parts.length - 1];
+                    if (lastPart && lastPart.type === 'text') {
+                      parts[parts.length - 1] = { type: 'text', text: lastPart.text + p.content };
+                    } else {
+                      parts.push({ type: 'text', text: p.content });
+                    }
+                    u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
                   }
-                  u[u.length - 1] = { ...l, content: newContent, contentParts: parts };
-                }
-                return u;
-              });
+                  return u;
+                });
+              }
             } else if (p.toolCall) {
               // Handle real-time tool call events (Requirement 12.2, 12.5)
               setMessages((prev) => {
@@ -629,13 +707,61 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 return u;
               });
             }
-          } catch {}
+          } catch (parseError) {
+            // Requirement 11.4: Handle malformed chunks gracefully and continue
+            // Requirement 11.7: Log error with context
+            const chunk = errorHandler.parseChunk(`data: ${d}`);
+            if (chunk === null) {
+              // Error already logged by handler, continue processing next chunks
+              continue;
+            }
+          }
         }
       }
+      
+      // Log streaming statistics after completion
+      const stats = errorHandler.getStats();
+      if (stats.totalErrors > 0) {
+        console.warn('[Streaming] Completed with errors:', stats);
+      }
     } catch (e: unknown) {
+      // Requirement 11.3: Display connection error for backend disconnection
+      // Requirement 11.5: Display timeout message for timeouts
       const errMsg = e instanceof Error ? e.message : 'Unknown error';
-      setMessages((p) => [...p, { id: Date.now().toString(), role: 'assistant', content: 'Error: ' + errMsg, timestamp: new Date() }]);
+      const isConnectionError = errMsg.includes('fetch') || errMsg.includes('network') || errMsg.includes('Failed to fetch');
+      const isTimeout = errMsg.includes('timeout') || errMsg.includes('timed out');
+      
+      let errorMessage = 'Error: ' + errMsg;
+      if (isConnectionError) {
+        errorMessage = '⚠️ Connection Error: Unable to reach the server. Please check your internet connection and try again.';
+      } else if (isTimeout) {
+        errorMessage = '⏱️ Request Timeout: The operation took too long to complete. Please try again.';
+      }
+      
+      setMessages((p) => [...p, { 
+        id: Date.now().toString(), 
+        role: 'assistant', 
+        content: errorMessage, 
+        timestamp: new Date() 
+      }]);
+      
+      // Log error with context - Requirement 11.7
+      console.error('[Chat] Error during message send:', {
+        error: errMsg,
+        isConnectionError,
+        isTimeout,
+        conversationId,
+        modelId: selectedModel,
+        timestamp: new Date().toISOString(),
+      });
     } finally {
+      // Flush any remaining buffered content
+      if (streamingBufferRef.current) {
+        streamingBufferRef.current.flush();
+        streamingBufferRef.current.destroy();
+        streamingBufferRef.current = null;
+      }
+      
       setIsLoading(false);
       
       // Fade out iteration state with smooth animation
@@ -790,7 +916,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
       </div>
 
       {/* Messages */}
-      <MessageList 
+      <SafeMessageList 
         messages={messages}
         isLoading={isLoading}
         isStreaming={isLastMessageStreaming}
@@ -822,69 +948,83 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         flexShrink: 0,
         background: 'var(--bg-primary)'
       }}>
-        {/* Claude-style unified input card */}
-        <div style={{ maxWidth: '780px', margin: '0 auto', width: '100%' }}>
-          <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="chat-input-card">
-            {/* Textarea row */}
-            <label htmlFor="message-input" className="sr-only">Type your message</label>
-            <textarea
-              id="message-input"
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                e.target.style.height = 'auto';
-                e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-              }}
-              placeholder="How can I help you today?"
-              disabled={isLoading}
-              rows={1}
-              tabIndex={0}
-              className="chat-input-textarea"
-            />
-            {/* Bottom toolbar row */}
-            <div className="chat-input-toolbar">
-              {/* Left: spacer */}
-              <div />
-              {/* Right: model selector + send button */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <label htmlFor="model-selector" className="sr-only">Select AI model</label>
-                <select
-                  id="model-selector"
-                  value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  className="chat-model-select"
-                  tabIndex={0}
-                  aria-label="Select AI model"
-                >
-                  {availableModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  disabled={!input.trim() || isLoading}
-                  className="chat-send-btn"
-                  aria-label="Send message"
-                >
-                  {isLoading ? (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="send-button-loading">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
-                      <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" opacity="0.75" />
-                    </svg>
-                  ) : (
-                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                    </svg>
-                  )}
-                </button>
+        {featureFlags.aiElementsInput() ? (
+          // AI Elements input with file upload (Requirement 3.1, 3.2, 3.5, 3.8)
+          <MessageInputAI
+            value={input}
+            onChange={setInput}
+            onSubmit={sendMessage}
+            disabled={isLoading}
+            placeholder="How can I help you today?"
+            selectedModel={selectedModel}
+            availableModels={availableModels}
+            onModelChange={handleModelChange}
+          />
+        ) : (
+          // Legacy input (fallback)
+          <div style={{ maxWidth: '780px', margin: '0 auto', width: '100%' }}>
+            <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="chat-input-card">
+              {/* Textarea row */}
+              <label htmlFor="message-input" className="sr-only">Type your message</label>
+              <textarea
+                id="message-input"
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                }}
+                placeholder="How can I help you today?"
+                disabled={isLoading}
+                rows={1}
+                tabIndex={0}
+                className="chat-input-textarea"
+              />
+              {/* Bottom toolbar row */}
+              <div className="chat-input-toolbar">
+                {/* Left: spacer */}
+                <div />
+                {/* Right: model selector + send button */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <label htmlFor="model-selector" className="sr-only">Select AI model</label>
+                  <select
+                    id="model-selector"
+                    value={selectedModel}
+                    onChange={(e) => handleModelChange(e.target.value)}
+                    className="chat-model-select"
+                    tabIndex={0}
+                    aria-label="Select AI model"
+                  >
+                    {availableModels.map((model) => (
+                      <option key={model.id} value={model.id}>{model.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={!input.trim() || isLoading}
+                    className="chat-send-btn"
+                    aria-label="Send message"
+                  >
+                    {isLoading ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="send-button-loading">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+                        <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" opacity="0.75" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </form>
-        </div>
+            </form>
+          </div>
+        )}
       </div>
     </main>
   );
@@ -904,6 +1044,8 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
       chatPanel={chatPanelComponent}
       artifactsPanel={artifactsPanelComponent}
       isArtifactsPanelOpen={isArtifactsPanelOpen}
+      sidebarOpen={sidebarOpen}
+      onSidebarClose={() => setSidebarOpen(false)}
     />
   );
 }

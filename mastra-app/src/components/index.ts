@@ -11,10 +11,16 @@ export { OutputRenderer, detectOutputType, isMermaidSyntax, hasGeographicColumns
 export type { OutputRendererProps } from './OutputRenderer';
 export { DataTable } from './DataTable';
 export type { DataTableProps } from './DataTable';
-export { Chart } from './Chart';
+
+// Heavy components - use lazy-loaded versions for better bundle size
+// Import from ChartLazy instead of Chart directly
+export { Chart } from './ChartLazy';
 export type { ChartProps, ChartType } from './Chart';
-export { MermaidDiagram } from './MermaidDiagram';
+
+// Import from MermaidDiagramLazy instead of MermaidDiagram directly
+export { MermaidDiagram } from './MermaidDiagramLazy';
 export type { MermaidDiagramProps } from './MermaidDiagram';
+
 export { SQLPlayground } from './SQLPlayground';
 export type { SQLPlaygroundProps } from './SQLPlayground';
 // export { ChatUI } from './ChatUI';
@@ -64,6 +70,7 @@ export type { UserMessageBubbleProps } from './UserMessageBubble';
 export { InlineVisualization } from './InlineVisualization';
 export type { InlineVisualizationProps, VisualizationData } from './InlineVisualization';
 
-// Artifacts Panel
-export { ArtifactsPanel } from './ArtifactsPanel';
+// Artifacts Panel - use lazy-loaded version for better bundle size
+export { ArtifactsPanel } from './ArtifactsPanelLazy';
 export type { ArtifactsPanelProps } from './ArtifactsPanel';
+

@@ -8,6 +8,9 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamingCursor } from './AssistantMessage';
 import { ProgressIndicator } from './ProgressIndicator';
 import { ToolExecutionDisplay } from './ToolExecutionDisplay';
+import { ToolExecutionDisplayAI } from './ai-elements/ToolExecutionDisplayAI';
+import { featureFlags } from '@/lib/feature-flags';
+import { extractToolNarrative } from '@/lib/ai-elements-adapters';
 
 interface UIMessage extends Message {
   progress?: { current: number; total: number };
@@ -297,6 +300,7 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false, onViewArti
     const content = message?.content || '';
     const toolCalls = message?.toolCalls || [];
     const contentParts = message?.contentParts;
+    const useAIElementsTools = featureFlags.aiElementsTools();
 
     // If we have ordered contentParts, render them directly (Claude Desktop style)
     if (contentParts && contentParts.length > 0) {
@@ -304,9 +308,19 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false, onViewArti
         <div>
           {contentParts.map((part, i) => {
             if (part.type === 'tool') {
+              const toolNarrative = extractToolNarrative(message, part.toolCall.id);
+              
               return (
                 <div key={`part-${i}`} style={{ margin: '4px 0' }}>
-                  <ToolExecutionDisplay toolCall={part.toolCall} status="completed" />
+                  {useAIElementsTools ? (
+                    <ToolExecutionDisplayAI 
+                      toolCall={part.toolCall} 
+                      status="completed"
+                      narrative={toolNarrative}
+                    />
+                  ) : (
+                    <ToolExecutionDisplay toolCall={part.toolCall} status="completed" />
+                  )}
                 </div>
               );
             }
@@ -343,11 +357,23 @@ function MessageItem({ message, isLast: _isLast, isStreaming = false, onViewArti
             <MarkdownRenderer content={content} />
           </div>
         )}
-        {toolCalls.map((tc, i) => (
-          <div key={`tool-${i}`} style={{ margin: '4px 0' }}>
-            <ToolExecutionDisplay toolCall={tc} status="completed" />
-          </div>
-        ))}
+        {toolCalls.map((tc, i) => {
+          const toolNarrative = extractToolNarrative(message, tc.id);
+          
+          return (
+            <div key={`tool-${i}`} style={{ margin: '4px 0' }}>
+              {useAIElementsTools ? (
+                <ToolExecutionDisplayAI 
+                  toolCall={tc} 
+                  status="completed"
+                  narrative={toolNarrative}
+                />
+              ) : (
+                <ToolExecutionDisplay toolCall={tc} status="completed" />
+              )}
+            </div>
+          );
+        })}
         {isStreaming && <StreamingCursor />}
       </div>
     );

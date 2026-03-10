@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+@import "./accessibility.css";
 
 /* 
  * OCI GenAI Chat — Design System
@@ -831,6 +833,34 @@ pre::-webkit-scrollbar-thumb:hover,
   }
   .copilot-sidebar-inner {
     width: 100%;
+  }
+  
+  /* Task 6.3: Mobile sidebar overlay styles
+     Requirements: 6.6, 6.7, 6.8, 14.1 */
+  .copilot-sidebar {
+    /* Mobile sidebar is handled by MainLayout as overlay */
+    position: static;
+  }
+  
+  /* Ensure sidebar content is scrollable on mobile */
+  .copilot-sidebar-inner {
+    overflow-y: auto;
+    height: 100%;
+  }
+  
+  /* Larger touch targets for mobile - Requirement 14.1 */
+  .copilot-sidebar-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  .copilot-conv-item button {
+    min-height: 44px;
+  }
+  
+  .hover-action-btn {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -2366,6 +2396,28 @@ pre::-webkit-scrollbar-thumb:hover,
   }
 }
 
+/* Fade In Animation for Tool Components */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Pulse animation for executing tools */
+@keyframes toolPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.02);
+  }
+}
+
 /* Slide Down Animation for New Content */
 @keyframes slideDown {
   from {
@@ -2480,6 +2532,32 @@ pre::-webkit-scrollbar-thumb:hover,
   }
 }
 
+/* Shimmer Animation for Skeleton Loaders - Task 9.5
+   Requirements: 1.3
+   Smooth shimmer effect for loading states */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Message Fade In Animation - Task 9.1
+   Requirements: 13.1, 13.7, 13.8
+   Smooth fade-in animation for new messages */
+@keyframes messageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Animation Utility Classes */
 .streaming-cursor {
   animation: cursor-pulse 1.2s ease-in-out infinite;
@@ -2509,6 +2587,10 @@ pre::-webkit-scrollbar-thumb:hover,
   animation: slideOutToRight 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
+.message-fade-in {
+  animation: messageFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
 /* Prefers Reduced Motion Support - Requirement 13.6 */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2528,7 +2610,8 @@ pre::-webkit-scrollbar-thumb:hover,
   .slide-in-left,
   .slide-out-left,
   .slide-in-right,
-  .slide-out-right {
+  .slide-out-right,
+  .message-fade-in {
     animation: none !important;
   }
   
@@ -2589,13 +2672,14 @@ pre::-webkit-scrollbar-thumb:hover,
   border-radius: 16px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
-  transition: all 0.15s ease;
+  transition: background-color 0.3s ease, border-color 0.3s ease, transform 0.2s ease;
   max-width: 100%;
 }
 
 .tool-executing {
   border-color: #f59e0b;
   background: rgba(245, 158, 11, 0.06);
+  animation: toolPulse 2s ease-in-out infinite;
 }
 
 .tool-completed {
@@ -2623,7 +2707,7 @@ pre::-webkit-scrollbar-thumb:hover,
   font-family: var(--font-family-base);
   padding: 0;
   text-align: left;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.2s ease;
   white-space: nowrap;
 }
 
@@ -2635,6 +2719,7 @@ pre::-webkit-scrollbar-thumb:hover,
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
+  transition: color 0.2s ease;
 }
 
 .tool-status {
@@ -2643,11 +2728,12 @@ pre::-webkit-scrollbar-thumb:hover,
   margin-left: 2px;
   display: flex;
   align-items: center;
+  transition: color 0.2s ease;
 }
 
 /* Chevron Rotation Animation - Requirement 13.2 */
 .chevron {
-  transition: transform 0.2s ease;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   display: inline-flex;
   flex-shrink: 0;
   transform: rotate(0deg);
@@ -2668,7 +2754,7 @@ pre::-webkit-scrollbar-thumb:hover,
   width: 100%;
   overflow-x: auto;
   color: var(--color-tool-text);
-  animation: slideDown 0.2s ease;
+  animation: slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Database Selector Styling - Task 9: Hover state transitions */
@@ -2945,7 +3031,7 @@ pre::-webkit-scrollbar-thumb:hover,
   height: 6px;
   border-radius: 50%;
   margin-right: 4px;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.3s ease, transform 0.2s ease, box-shadow 0.3s ease;
 }
 
 .status-connected {
@@ -2958,6 +3044,17 @@ pre::-webkit-scrollbar-thumb:hover,
 
 .status-error {
   background-color: var(--color-status-error);
+  animation: errorPulse 2s ease-in-out infinite;
+}
+
+/* Error pulse animation for failed states */
+@keyframes errorPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0);
+  }
 }
 
 /* Performance Grade Colors - Task 9: Add transitions */
@@ -4277,3 +4374,144 @@ a[href] {
 /* ==========================================================================
    End of Accessibility Utilities
    ========================================================================== */
+
+
+/* ==========================================================================
+   shadcn/ui Theme Integration
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* shadcn/ui color tokens mapped to existing design system */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 173 80% 40%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 173 80% 40%;
+    --radius: 0.5rem;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+  }
+
+  .dark {
+    /* shadcn/ui dark mode tokens mapped to existing dark theme */
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 173 80% 40%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 32.6% 17.5%;
+    --input: 217 32.6% 17.5%;
+    --ring: 173 80% 40%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+}
+
+/* File upload button styles */
+.chat-file-upload-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.chat-file-upload-btn:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+/* ==========================================================================
+   Micro-interactions - Task 9.4
+   Requirements: 13.4, 13.5
+   ========================================================================== */
+
+/* Button Ripple Effect - Requirement 13.4 */
+@keyframes ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.6);
+  animation: ripple 0.6s ease-out;
+  pointer-events: none;
+}
+
+/* Dark mode ripple */
+:root.dark .ripple {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Enhanced button hover effects - Requirement 13.4 */
+button:not(:disabled):hover {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Enhanced input focus animations - Requirement 13.5 */
+input:focus,
+textarea:focus {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Smooth focus ring animation */
+@keyframes focusRing {
+  0% {
+    box-shadow: 0 0 0 0 var(--ring);
+  }
+  100% {
+    box-shadow: 0 0 0 3px var(--ring);
+  }
+}
+
+/* Apply focus ring animation to inputs */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  animation: focusRing 0.2s ease-out;
+}

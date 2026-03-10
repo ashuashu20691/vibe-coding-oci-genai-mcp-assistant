@@ -2,11 +2,11 @@
 
 import { useMemo } from 'react';
 import { OutputType } from '@/types';
-import { Chart } from './Chart';
+import { Chart } from './ChartLazy'; // Use lazy-loaded version
 import { DataTable } from './DataTable';
 import { DashboardRenderer } from './DashboardRenderer';
 import { MapRenderer } from './MapRenderer';
-import { MermaidDiagram } from './MermaidDiagram';
+import { MermaidDiagram } from './MermaidDiagramLazy'; // Use lazy-loaded version
 import { PhotoGalleryRenderer } from './PhotoGalleryRenderer';
 import { TimelineRenderer } from './TimelineRenderer';
 

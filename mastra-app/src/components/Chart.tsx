@@ -85,6 +85,8 @@ const CHART_STYLES = {
  */
 export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullscreenEnabled = true, exportEnabled = true }: ChartProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showLegend, setShowLegend] = useState(true);
+  const [zoomDomain, setZoomDomain] = useState<{ x?: [number, number]; y?: [number, number] } | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
 
   // Export handler for PNG export
@@ -101,6 +103,16 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
       }
     }
   }, [title, type]);
+
+  // Reset zoom handler (Requirement 5.8)
+  const handleResetZoom = useCallback(() => {
+    setZoomDomain(null);
+  }, []);
+
+  // Toggle legend handler (Requirement 5.8)
+  const handleToggleLegend = useCallback(() => {
+    setShowLegend(prev => !prev);
+  }, []);
 
   // Export options for charts (PNG only)
   const exportOptions = [
@@ -190,14 +202,16 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               angle={-45}
               textAnchor="end"
               height={60}
+              domain={zoomDomain?.x}
             />
             <YAxis
               tick={CHART_STYLES.axis.tick}
               axisLine={CHART_STYLES.axis.axisLine}
               tickLine={CHART_STYLES.axis.tickLine}
+              domain={zoomDomain?.y}
             />
             <Tooltip {...CHART_STYLES.tooltip} />
-            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+            {showLegend && <Legend wrapperStyle={{ paddingTop: '20px' }} />}
             <Bar dataKey={yColumn} fill={COLORS[0]} radius={[4, 4, 0, 0]} name={yColumn}>
               {colorColumn && colorValues.length > 0 && chartData.map((entry, index) => {
                 const colorIndex = colorValues.indexOf(String((entry as any)[colorColumn]));
@@ -221,14 +235,16 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               angle={-45}
               textAnchor="end"
               height={60}
+              domain={zoomDomain?.x}
             />
             <YAxis
               tick={CHART_STYLES.axis.tick}
               axisLine={CHART_STYLES.axis.axisLine}
               tickLine={CHART_STYLES.axis.tickLine}
+              domain={zoomDomain?.y}
             />
             <Tooltip {...CHART_STYLES.tooltip} />
-            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+            {showLegend && <Legend wrapperStyle={{ paddingTop: '20px' }} />}
             <Line
               type="monotone"
               dataKey={yColumn}
@@ -259,14 +275,16 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               angle={-45}
               textAnchor="end"
               height={60}
+              domain={zoomDomain?.x}
             />
             <YAxis
               tick={CHART_STYLES.axis.tick}
               axisLine={CHART_STYLES.axis.axisLine}
               tickLine={CHART_STYLES.axis.tickLine}
+              domain={zoomDomain?.y}
             />
             <Tooltip {...CHART_STYLES.tooltip} />
-            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+            {showLegend && <Legend wrapperStyle={{ paddingTop: '20px' }} />}
             <Area
               type="monotone"
               dataKey={yColumn}
@@ -300,7 +318,7 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               ))}
             </Pie>
             <Tooltip {...CHART_STYLES.tooltip} />
-            <Legend wrapperStyle={{ paddingTop: '10px' }} />
+            {showLegend && <Legend wrapperStyle={{ paddingTop: '10px' }} />}
           </PieChart>
         );
 
@@ -315,6 +333,7 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               axisLine={CHART_STYLES.axis.axisLine}
               tickLine={CHART_STYLES.axis.tickLine}
               name={xColumn}
+              domain={zoomDomain?.x}
             />
             <YAxis
               dataKey={yColumn}
@@ -323,12 +342,13 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
               axisLine={CHART_STYLES.axis.axisLine}
               tickLine={CHART_STYLES.axis.tickLine}
               name={yColumn}
+              domain={zoomDomain?.y}
             />
             <Tooltip
               cursor={{ strokeDasharray: '3 3' }}
               {...CHART_STYLES.tooltip}
             />
-            <Legend wrapperStyle={{ paddingTop: '20px' }} />
+            {showLegend && <Legend wrapperStyle={{ paddingTop: '20px' }} />}
             <Scatter
               name={`${xColumn} vs ${yColumn}`}
               data={chartData}
@@ -374,6 +394,33 @@ export function Chart({ data, type, xColumn, yColumn, colorColumn, title, fullsc
         )}
         {!title && <div />}
         <div className="flex items-center gap-2">
+          {/* Chart Controls (Requirement 5.8) */}
+          <div className="flex items-center gap-1 mr-2 border-r border-gray-200 pr-2">
+            <button
+              onClick={handleToggleLegend}
+              className={`p-1.5 rounded hover:bg-gray-100 transition-colors ${
+                showLegend ? 'text-blue-600' : 'text-gray-400'
+              }`}
+              title={showLegend ? 'Hide legend' : 'Show legend'}
+              aria-label={showLegend ? 'Hide legend' : 'Show legend'}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            {zoomDomain && (
+              <button
+                onClick={handleResetZoom}
+                className="p-1.5 rounded hover:bg-gray-100 transition-colors text-gray-600"
+                title="Reset zoom"
+                aria-label="Reset zoom"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+                </svg>
+              </button>
+            )}
+          </div>
           {exportEnabled && data.length > 0 && (
             <ExportDropdown
               options={exportOptions}
