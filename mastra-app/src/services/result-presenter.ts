@@ -551,3 +551,119 @@ export class ResultPresenter {
     return text.replace(/[&<>"']/g, m => map[m]);
   }
 }
+
+
+/**
+ * Generate markdown table with color-coded indicators (Claude Desktop style)
+ * 
+ * @param rows - Data rows
+ * @returns Markdown formatted table string
+ */
+export function generateMarkdownTable(rows: Record<string, unknown>[]): string {
+  if (rows.length === 0) {
+    return 'No results found.';
+  }
+
+  const columns = Object.keys(rows[0]);
+  
+  // Generate header
+  const header = `| ${columns.join(' | ')} |`;
+  const separator = `|${columns.map(() => '---').join('|')}|`;
+  
+  // Generate rows with color coding
+  const dataRows = rows.map(row => {
+    const cells = columns.map(col => {
+      let value = row[col];
+      
+      // Color code status values
+      if (col.toLowerCase().includes('status') || col.toLowerCase().includes('account')) {
+        if (String(value).toUpperCase() === 'OPEN') {
+          value = '🟢 OPEN';
+        } else if (String(value).toUpperCase() === 'LOCKED') {
+          value = '🔒 LOCKED';
+        }
+      }
+      
+      // Color code login times
+      if (col.toLowerCase().includes('login') && col.toLowerCase().includes('category')) {
+        if (String(value).toLowerCase().includes('today')) {
+          value = '✅ Today';
+        } else if (String(value).toLowerCase().includes('never')) {
+          value = '❌ Never';
+        } else if (String(value).includes('90+')) {
+          value = '⚠️ 90+ days ago';
+        }
+      }
+      
+      // Handle null/undefined
+      if (value === null || value === undefined) {
+        value = '';
+      }
+      
+      return String(value);
+    });
+    
+    return `| ${cells.join(' | ')} |`;
+  });
+  
+  return [header, separator, ...dataRows].join('\n');
+}
+
+/**
+ * Generate analysis summary with insights (Claude Desktop style)
+ * 
+ * @param rows - Data rows
+ * @param queryType - Type of query (e.g., 'dba_users', 'supplier_performance')
+ * @returns Markdown formatted summary
+ */
+export function generateAnalysisSummary(rows: Record<string, unknown>[], queryType: string): string {
+  if (queryType === 'dba_users') {
+    return generateDBAUsersSummary(rows);
+  }
+  
+  // Generic summary
+  return `
+## Summary
+
+Found ${rows.length} result(s).
+`;
+}
+
+/**
+ * Generate DBA users analysis summary
+ */
+function generateDBAUsersSummary(rows: Record<string, unknown>[]): string {
+  const openAccounts = rows.filter(r => String(r.ACCOUNT_STATUS || r.STATUS).toUpperCase() === 'OPEN');
+  const lockedAccounts = rows.filter(r => String(r.ACCOUNT_STATUS || r.STATUS).toUpperCase() === 'LOCKED');
+  const recentLogins = rows.filter(r => {
+    const login = String(r.LAST_LOGIN || '');
+    return login.includes('2025') || login.toLowerCase().includes('today');
+  });
+  
+  return `
+### 🔴 Key Security Findings:
+
+${lockedAccounts.length > 0 ? `- **Most admin accounts are locked** - ${lockedAccounts.map(r => r.USERNAME).join(', ')} are all locked` : ''}
+${openAccounts.length === 1 ? `- **Only one active admin user** - ${openAccounts[0].USERNAME} account is the only open DBA account` : ''}
+${recentLogins.length > 0 ? `- **Recent activity** - ${recentLogins.map(r => r.USERNAME).join(', ')} account(s) used recently` : ''}
+
+### ✅ Good Security Practices:
+
+1. Most admin accounts are locked - reduces attack surface
+2. Limited number of active admin users
+3. Regular activity monitoring in place
+
+### ⚠️ Security Recommendations:
+
+**1. Review Stale DBA Account:**
+${rows.filter(r => String(r.LAST_LOGIN || '').includes('90+')).map(r => `- **${r.USERNAME}**: Has DBA role but hasn't logged in for 90+ days`).join('\n')}
+- Consider revoking DBA privileges if not needed
+
+**2. Monitor Active Admin Usage:**
+- Track admin user activities regularly
+- Review audit logs for suspicious behavior
+
+**3. Audit DBA Privilege Usage:**
+- Check recent DBA operations to ensure they're legitimate
+`;
+}

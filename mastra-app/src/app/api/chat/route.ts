@@ -366,7 +366,7 @@ export async function POST(request: NextRequest) {
       provider: ociProvider,
       modelId,
       temperature: 0,
-      maxTokens: 4000,
+      maxTokens: 8000, // Increased to prevent cutoff during data generation workflows
       conversationId: conversationId || 'default',
     });
 
@@ -446,9 +446,9 @@ export async function POST(request: NextRequest) {
     // Check if clarification is needed - in autonomous mode, almost never
     const clarificationPrompt = generateClarificationPrompt(userIntent);
 
-    // Check if user is requesting a visualization (any viz type, including custom/dashboard)
-    const isVisualizationRequest = !!(userIntent.visualizationType) ||
-      lastUserMessage.match(/\b(visual|chart|graph|dashboard|plot|report|html)\b/) !== null;
+    // DISABLED: Auto-visualization detection - let agent handle conversationally
+    // The agent will decide when to show visualizations based on conversation flow
+    const isVisualizationRequest = false;
 
     // Create streaming response
     const encoder = new TextEncoder();
@@ -662,7 +662,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     // Create ChatService with narrative integration
     const chatService = createChatService(modelAdapter, narrativeService, {
       systemPrompt: systemInstructions,
-      maxIterations: 5, // Reduced to prevent loops
+      maxIterations: 8, // Increased for data generation workflows with retries
     });
 
     const stream = new ReadableStream({
@@ -980,55 +980,21 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                     )
                   );
 
-                  // Cache SQL query data for on-demand visualization
-                  // The agent autonomously decides when to visualize — we don't auto-generate charts
+                  // Cache SQL query data for potential future visualization
+                  // DO NOT auto-generate visualizations - let the agent decide conversationally
                   const isSqlQuery = toolCall?.name === 'sqlcl_run_sql';
                   const data = isSqlQuery ? extractDataFromToolResult(event.result.content) : null;
                   console.log(`[chat/POST] extractDataFromToolResult result: ${data ? data.length + ' rows, cols: ' + Object.keys(data[0] || {}).join(',') : 'null'} (tool: ${toolCall?.name})`);
                   if (data && data.length > 0) {
                     lastQueryData = data;
                     conversationDataCache.set(conversationId || 'default', data);
-                    console.log(`[chat/POST] Cached ${data.length} rows for conversation ${conversationId || 'default'}`);
-
-                    // Generate visualization only when the user explicitly requested one
-                    // (dashboard, chart, graph, visual, etc.) — not on every SQL result
-                    if (isVisualizationRequest) {
-                      try {
-                        const analysis = analyzeData({ data, query: 'SQL query' });
-                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ analysis })}\n\n`));
-
-                        let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
-                        let vizTitle = 'Query Results';
-                        if (userIntent.visualizationType) {
-                          switch (userIntent.visualizationType) {
-                            case 'bar': vizType = 'bar'; vizTitle = 'Bar Chart'; break;
-                            case 'line': vizType = 'line'; vizTitle = 'Line Chart'; break;
-                            case 'pie': vizType = 'pie'; vizTitle = 'Pie Chart'; break;
-                            case 'dashboard': vizType = 'html'; vizTitle = 'Dashboard'; break;
-                          }
-                        }
-                        if (lastUserMessage.includes('dashboard')) {
-                          vizType = 'html';
-                          vizTitle = 'Data Dashboard';
-                        }
-
-                        const viz = await generateVisualization({ data, type: vizType, title: vizTitle });
-                        console.log(`[chat/POST] Generated ${viz.type} visualization`);
-
-                        const visualizationData: Record<string, unknown> = { type: viz.type, title: vizTitle };
-                        if (typeof viz.content === 'string') {
-                          visualizationData.html = viz.content;
-                        } else if (typeof viz.content === 'object' && viz.content !== null) {
-                          Object.assign(visualizationData, viz.content);
-                        }
-                        visualizationData.data = data;
-
-                        lastVisualization = visualizationData;
-                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
-                      } catch (vizError) {
-                        console.error('[chat/POST] Visualization error:', vizError);
-                      }
-                    }
+                    console.log(`[chat/POST] Cached ${data.length} rows for conversation ${conversationId || 'default'} - agent will decide if visualization is needed`);
+                    // NOTE: We cache the data but DO NOT automatically generate visualizations.
+                    // The agent will conversationally decide when to show visualizations based on:
+                    // 1. User explicitly asks for a dashboard/chart/visual
+                    // 2. Agent determines visualization would be helpful
+                    // 3. User confirms they want synthetic data generated
+                    // This prevents unwanted dashboards when user just wants to see data.
                   }
                   
                   console.log(`[chat/POST] Tool result for: ${event.result.toolCallId}`);
