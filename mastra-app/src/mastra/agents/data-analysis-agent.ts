@@ -9,6 +9,11 @@ export const DATA_ANALYSIS_AGENT_INSTRUCTIONS = `You are a data analyst. Given a
 Work directly with the data provided. Do not ask for more data or suggest running additional queries — analyze what you have.
 
 Prioritize findings that are actionable or surprising. Skip obvious observations.
+
+If the initial data is shallow (e.g., all values identical, no meaningful variance), you may use DDL to build analytical layers:
+- CREATE VIEW to aggregate or join tables for a richer perspective
+- CREATE TABLE AS SELECT to materialize a derived dataset for deeper analysis
+Always clean up temporary objects (DROP TABLE/VIEW) after use.
 </behavior>
 
 <output_structure>
@@ -25,6 +30,7 @@ For numeric columns: identify the range, average, and any outliers worth noting.
 For categorical columns: identify the dominant category and any notable minorities.
 For time-based data: identify the trend direction and any inflection points.
 For grouped data: identify the top and bottom performers and the gap between them.
+Flag anomalies explicitly — e.g., "EMEA shows 0% on-time delivery — this is a crisis."
 </analysis_approach>`;
 
 export interface AnalysisRequest {
@@ -43,9 +49,11 @@ export interface AnalysisResult {
 
 /**
  * Analyze data and generate insights.
+ * Produces structured stats for the InlineAnalysisCard UI component.
+ * The LLM agent's text response handles narrative analysis — this handles computed metrics.
  */
 export function analyzeData(request: AnalysisRequest): AnalysisResult {
-  const { data, query, context } = request;
+  const { data, query } = request;
 
   if (!Array.isArray(data) || data.length === 0) {
     return {
@@ -61,26 +69,16 @@ export function analyzeData(request: AnalysisRequest): AnalysisResult {
   const insights = generateInsights(data, statistics);
   const recommendations = generateRecommendations(data, statistics, query);
   const suggestedVisualizations = suggestVisualizations(data, statistics);
-
   const summary = generateSummary(data, statistics);
 
-  return {
-    summary,
-    statistics,
-    insights,
-    recommendations,
-    suggestedVisualizations,
-  };
+  return { summary, statistics, insights, recommendations, suggestedVisualizations };
 }
 
 /**
  * Calculate basic statistics from data.
  */
 function calculateStatistics(data: unknown[]): Record<string, unknown> {
-  const stats: Record<string, unknown> = {
-    rowCount: data.length,
-  };
-
+  const stats: Record<string, unknown> = { rowCount: data.length };
   if (data.length === 0) return stats;
 
   const firstRow = data[0];
@@ -90,19 +88,18 @@ function calculateStatistics(data: unknown[]): Record<string, unknown> {
   stats.columnCount = columns.length;
   stats.columns = columns;
 
-  // Analyze each column
   const columnStats: Record<string, unknown> = {};
-  
   columns.forEach(col => {
     const values = data.map(row => (row as Record<string, unknown>)[col]);
     const numericValues = values.filter(v => typeof v === 'number') as number[];
-    
+
     if (numericValues.length > 0) {
+      const sum = numericValues.reduce((a, b) => a + b, 0);
       columnStats[col] = {
         type: 'numeric',
         count: numericValues.length,
-        sum: numericValues.reduce((a, b) => a + b, 0),
-        avg: numericValues.reduce((a, b) => a + b, 0) / numericValues.length,
+        sum,
+        avg: sum / numericValues.length,
         min: Math.min(...numericValues),
         max: Math.max(...numericValues),
       };
@@ -125,11 +122,7 @@ function calculateStatistics(data: unknown[]): Record<string, unknown> {
  */
 function getTopValues(values: unknown[], n: number): Array<{ value: unknown; count: number }> {
   const counts = new Map<unknown, number>();
-  
-  values.forEach(v => {
-    counts.set(v, (counts.get(v) || 0) + 1);
-  });
-
+  values.forEach(v => counts.set(v, (counts.get(v) || 0) + 1));
   return Array.from(counts.entries())
     .map(([value, count]) => ({ value, count }))
     .sort((a, b) => b.count - a.count)
@@ -137,45 +130,77 @@ function getTopValues(values: unknown[], n: number): Array<{ value: unknown; cou
 }
 
 /**
- * Generate insights from data and statistics.
+ * Generate insights — spots anomalies, outliers, top/bottom performers.
  */
 function generateInsights(data: unknown[], statistics: Record<string, unknown>): string[] {
   const insights: string[] = [];
   const columnStats = statistics.columnStats as Record<string, unknown> | undefined;
-
   if (!columnStats) return insights;
 
-  // Analyze numeric columns
-  Object.entries(columnStats).forEach(([col, stats]) => {
-    const colStats = stats as { type: string; avg?: number; min?: number; max?: number };
-    
-    if (colStats.type === 'numeric' && colStats.avg !== undefined) {
-      const range = (colStats.max || 0) - (colStats.min || 0);
-      const avgValue = colStats.avg;
-      
-      if (range > avgValue * 2) {
-        insights.push(`${col} shows high variability (range: ${colStats.min} to ${colStats.max})`);
-      }
-    }
-  });
+  const rows = data as Record<string, unknown>[];
+  const columns = Object.keys(columnStats);
+  const numericCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'numeric');
+  const catCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'categorical');
 
-  // Check for potential grouping columns
-  Object.entries(columnStats).forEach(([col, stats]) => {
-    const colStats = stats as { type: string; uniqueCount?: number };
-    const rowCount = statistics.rowCount as number;
-    
-    if (colStats.type === 'categorical' && colStats.uniqueCount) {
-      if (colStats.uniqueCount < rowCount * 0.5) {
-        insights.push(`${col} could be used for grouping (${colStats.uniqueCount} unique values)`);
+  if (numericCols.length > 0 && catCols.length > 0) {
+    const metricCol = numericCols[0];
+    const labelCol = catCols[0];
+    const stats = columnStats[metricCol] as { avg: number; min: number; max: number; sum: number };
+
+    // Top and bottom performers
+    const sorted = [...rows].sort((a, b) => (Number(b[metricCol]) || 0) - (Number(a[metricCol]) || 0));
+    const top = sorted[0];
+    const bottom = sorted[sorted.length - 1];
+
+    if (top && bottom) {
+      const topVal = Number(top[metricCol]);
+      const bottomVal = Number(bottom[metricCol]);
+      insights.push(`Top performer: ${top[labelCol]} (${topVal.toLocaleString()})`);
+      if (bottomVal === 0) {
+        insights.push(`⚠️ ${bottom[labelCol]} has zero ${metricCol} — possible data issue or complete underperformance`);
+      } else {
+        insights.push(`Bottom performer: ${bottom[labelCol]} (${bottomVal.toLocaleString()})`);
       }
     }
-  });
+
+    // Zero-value anomalies
+    const zeroRows = rows.filter(r => Number(r[metricCol]) === 0);
+    if (zeroRows.length > 0 && zeroRows.length < rows.length) {
+      const zeroLabels = zeroRows.map(r => r[labelCol]).join(', ');
+      insights.push(`🚨 ${zeroRows.length} group(s) with zero ${metricCol}: ${zeroLabels}`);
+    }
+
+    // Outliers: > 2 standard deviations from mean
+    if (stats.avg > 0) {
+      const values = rows.map(r => Number(r[metricCol]) || 0);
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      const stdDev = Math.sqrt(values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length);
+      const outliers = rows.filter(r => Math.abs((Number(r[metricCol]) || 0) - mean) > 2 * stdDev);
+      if (outliers.length > 0 && outliers.length <= 3) {
+        outliers.forEach(r => {
+          const val = Number(r[metricCol]);
+          const direction = val > mean ? 'above' : 'below';
+          insights.push(`Outlier: ${r[labelCol]} is significantly ${direction} average (${val.toLocaleString()} vs avg ${mean.toFixed(0)})`);
+        });
+      }
+    }
+  }
+
+  // Single numeric column — report spread
+  if (numericCols.length > 0 && catCols.length === 0) {
+    const col = numericCols[0];
+    const stats = columnStats[col] as { avg: number; min: number; max: number };
+    const range = stats.max - stats.min;
+    if (range > stats.avg * 3) {
+      insights.push(`High spread in ${col}: min ${stats.min.toLocaleString()}, max ${stats.max.toLocaleString()}, avg ${stats.avg.toFixed(0)}`);
+    }
+  }
 
   return insights;
 }
 
 /**
- * Generate recommendations based on analysis.
+ * Generate recommendations based on actual data patterns.
  */
 function generateRecommendations(
   data: unknown[],
@@ -184,35 +209,42 @@ function generateRecommendations(
 ): string[] {
   const recommendations: string[] = [];
   const columnStats = statistics.columnStats as Record<string, unknown> | undefined;
-
   if (!columnStats) return recommendations;
 
-  // Recommend aggregations for numeric columns
-  const numericColumns = Object.entries(columnStats)
-    .filter(([_, stats]) => (stats as { type: string }).type === 'numeric')
-    .map(([col]) => col);
+  const rows = data as Record<string, unknown>[];
+  const columns = Object.keys(columnStats);
+  const numericCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'numeric');
+  const catCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'categorical');
+  const dateCols = columns.filter(c => c.toLowerCase().includes('date') || c.toLowerCase().includes('time'));
 
-  if (numericColumns.length > 0) {
-    recommendations.push(`Consider aggregating ${numericColumns.join(', ')} by categories`);
-  }
+  if (numericCols.length > 0 && catCols.length > 0) {
+    const metricCol = numericCols[0];
+    const labelCol = catCols[0];
 
-  // Recommend time-based analysis if date columns exist
-  const dateColumns = Object.keys(columnStats).filter(col =>
-    col.toLowerCase().includes('date') || col.toLowerCase().includes('time')
-  );
-
-  if (dateColumns.length > 0) {
-    recommendations.push(`Analyze trends over time using ${dateColumns.join(', ')}`);
-  }
-
-  // Recommend filtering if many unique values
-  Object.entries(columnStats).forEach(([col, stats]) => {
-    const colStats = stats as { type: string; uniqueCount?: number };
-    
-    if (colStats.type === 'categorical' && colStats.uniqueCount && colStats.uniqueCount > 10) {
-      recommendations.push(`Consider filtering ${col} to focus on specific values`);
+    // Recommend investigating zero-value groups
+    const zeroRows = rows.filter(r => Number(r[metricCol]) === 0);
+    if (zeroRows.length > 0) {
+      recommendations.push(`Investigate ${zeroRows.length} group(s) with zero ${metricCol} — may indicate missing data or a systemic issue`);
     }
-  });
+
+    // Recommend comparing top vs bottom if large gap
+    const sorted = [...rows].sort((a, b) => (Number(b[metricCol]) || 0) - (Number(a[metricCol]) || 0));
+    if (sorted.length >= 2) {
+      const topVal = Number(sorted[0][metricCol]);
+      const bottomVal = Number(sorted[sorted.length - 1][metricCol]);
+      if (topVal > 0 && bottomVal >= 0 && topVal / Math.max(bottomVal, 1) > 3) {
+        recommendations.push(`Large gap between top and bottom ${labelCol} — consider targeted intervention for underperformers`);
+      }
+    }
+  }
+
+  if (dateCols.length > 0 && numericCols.length > 0) {
+    recommendations.push(`Trend analysis available — filter by ${dateCols[0]} to see performance over time`);
+  }
+
+  if (recommendations.length === 0 && numericCols.length > 0) {
+    recommendations.push(`Compare ${numericCols[0]} across different segments for deeper insight`);
+  }
 
   return recommendations;
 }
@@ -223,27 +255,17 @@ function generateRecommendations(
 function suggestVisualizations(data: unknown[], statistics: Record<string, unknown>): string[] {
   const suggestions: string[] = [];
   const columnStats = statistics.columnStats as Record<string, unknown> | undefined;
-
   if (!columnStats) return suggestions;
 
   const columns = Object.keys(columnStats);
-  const numericColumns = columns.filter(col => 
-    (columnStats[col] as { type: string }).type === 'numeric'
-  );
-  const categoricalColumns = columns.filter(col =>
-    (columnStats[col] as { type: string }).type === 'categorical'
-  );
-  const dateColumns = columns.filter(col =>
-    col.toLowerCase().includes('date') || col.toLowerCase().includes('time')
-  );
+  const numericColumns = columns.filter(col => (columnStats[col] as { type: string }).type === 'numeric');
+  const categoricalColumns = columns.filter(col => (columnStats[col] as { type: string }).type === 'categorical');
+  const dateColumns = columns.filter(col => col.toLowerCase().includes('date') || col.toLowerCase().includes('time'));
 
-  // Always suggest table view
   suggestions.push('Table view for detailed data exploration');
 
-  // Suggest charts based on data structure
   if (categoricalColumns.length > 0 && numericColumns.length > 0) {
     suggestions.push(`Bar chart: ${numericColumns[0]} by ${categoricalColumns[0]}`);
-    
     if (categoricalColumns.length === 1) {
       suggestions.push(`Pie chart: Distribution of ${numericColumns[0]} by ${categoricalColumns[0]}`);
     }
@@ -261,11 +283,25 @@ function suggestVisualizations(data: unknown[], statistics: Record<string, unkno
 }
 
 /**
- * Generate summary text.
+ * Generate a meaningful summary sentence.
  */
 function generateSummary(data: unknown[], statistics: Record<string, unknown>): string {
   const rowCount = statistics.rowCount as number;
-  const columnCount = statistics.columnCount as number;
-  
-  return `Dataset contains ${rowCount} rows and ${columnCount} columns`;
+  const columnStats = statistics.columnStats as Record<string, unknown> | undefined;
+  if (!columnStats) return `${rowCount} rows returned`;
+
+  const columns = Object.keys(columnStats);
+  const numericCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'numeric');
+  const catCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'categorical');
+
+  if (numericCols.length > 0 && catCols.length > 0) {
+    const metricCol = numericCols[0];
+    const stats = columnStats[metricCol] as { sum?: number };
+    const total = stats.sum ? stats.sum.toLocaleString(undefined, { maximumFractionDigits: 0 }) : null;
+    return total
+      ? `${rowCount} ${catCols[0]} groups — total ${metricCol}: ${total}`
+      : `${rowCount} ${catCols[0]} groups analyzed`;
+  }
+
+  return `${rowCount} rows, ${columns.length} columns`;
 }

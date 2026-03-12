@@ -144,7 +144,9 @@ export class NarrativeStreamingService {
       if (text.toLowerCase().includes('no rows') || text.toLowerCase().includes('0 rows')) {
         return 'Query returned no results.';
       }
-      if (text.toLowerCase().includes('error')) {
+      // Only detect actual SQL errors, not just the word "error" in data
+      // Check for Oracle error codes (ORA-), SQL error keywords at start of lines, or explicit error messages
+      if (/\bORA-\d+/i.test(text) || /^(error|failed|exception):/im.test(text) || /\berror\s*:\s*/i.test(text)) {
         return 'Query returned an error.';
       }
       return '';
