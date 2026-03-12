@@ -662,7 +662,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
     // Create ChatService with narrative integration
     const chatService = createChatService(modelAdapter, narrativeService, {
       systemPrompt: systemInstructions,
-      maxIterations: 8, // Increased for data generation workflows with retries
+      maxIterations: 30, // High limit to allow complex multi-table data generation tasks to complete
     });
 
     const stream = new ReadableStream({
@@ -832,7 +832,7 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           const streamOptions = hasTools
             ? {
               toolsets: { sqlcl: mcpTools },
-              maxSteps: 8, // Increased to allow data generation (connect, schema, multiple INSERTs, query)
+              maxSteps: 30, // High limit to allow complex multi-table data generation to complete
               onStepFinish: (step: { text: string; toolCalls: ToolCall[]; toolResults: Array<{ toolCallId: string; result: unknown }>; finishReason: string }) => {
                 console.log(`[chat] Step finished: ${step.toolCalls.length} tool calls, reason: ${step.finishReason}`);
 
@@ -1151,8 +1151,21 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           const appError = classifyError(error);
           logError('chat/stream', error, { modelId, conversationId });
 
-          // Error narrative is already handled by ChatService
-          // Just emit the error event for UI
+          // For rate limit errors, provide helpful guidance
+          if (appError.code === 'RATE_LIMIT_ERROR') {
+            const waitSeconds = Math.ceil((appError.details?.retryAfterMs as number || 30000) / 1000);
+            
+            // Send a user-friendly message about the rate limit
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  content: `\n\n⚠️ **Rate Limit Reached**\n\nThe OCI service is temporarily rate-limiting requests. This happens when making many API calls in a short time.\n\n**What to do:**\n- Wait ${waitSeconds} seconds and send your message again\n- Your progress has been saved\n- The system will automatically retry\n\nTip: For large multi-table tasks, consider breaking them into smaller batches (2-3 tables at a time).\n\n`
+                })}\n\n`
+              )
+            );
+          }
+
+          // Emit error event for UI
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({

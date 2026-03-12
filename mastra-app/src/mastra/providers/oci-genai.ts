@@ -55,8 +55,8 @@ export class OCIGenAIProvider {
   // Rate limiting configuration
   private lastRequestTime: number = 0;
   private minRequestIntervalMs: number = 1000; // Minimum 1 second between requests
-  private maxRetries: number = 3;
-  private baseRetryDelayMs: number = 2000; // Start with 2 second delay
+  private maxRetries: number = 4; // Increased retries for rate-limited environments
+  private baseRetryDelayMs: number = 3000; // Start with 3 second delay (increased from 2s)
 
   constructor(config: OCIProviderConfig) {
     this.config = config;

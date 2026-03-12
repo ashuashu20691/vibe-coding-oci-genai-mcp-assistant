@@ -149,12 +149,23 @@ export function classifyError(error: unknown): AppError {
     lowerMessage.includes('too many requests')
   ) {
     const info = getErrorInfo(ErrorCode.RATE_LIMIT_ERROR);
+    
+    // Calculate suggested wait time based on retry attempts
+    // If the error message contains retry info, extract it
+    let suggestedWaitSeconds = 30; // Default 30 seconds
+    const retryMatch = message.match(/wait.*?(\d+).*?second/i);
+    if (retryMatch) {
+      suggestedWaitSeconds = parseInt(retryMatch[1], 10);
+    }
+    
+    const userMessage = `${info.title}: The OCI service is rate-limiting requests. Please wait ${suggestedWaitSeconds} seconds and try again. Your progress has been saved.`;
+    
     return new AppError(
       ErrorCode.RATE_LIMIT_ERROR,
       message,
-      `${info.title}: ${info.suggestion}`,
+      userMessage,
       true, // Rate limit errors are retryable after waiting
-      { retryAfterMs: 5000 }
+      { retryAfterMs: suggestedWaitSeconds * 1000 }
     );
   }
 
