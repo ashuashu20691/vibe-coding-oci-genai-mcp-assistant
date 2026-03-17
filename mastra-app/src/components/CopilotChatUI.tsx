@@ -12,6 +12,7 @@ import { shouldRouteToArtifacts } from '@/utils/result-routing';
 import { featureFlags } from '@/lib/feature-flags';
 import { safeComponent } from '@/lib/component-mapper';
 import { createStreamingBuffer } from '@/utils/streaming-buffer';
+import { reconstructContentParts } from '@/utils/content-parts-reconstruction';
 
 const DEFAULT_MODEL = 'google.gemini-2.5-flash';
 
@@ -301,12 +302,44 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           if (msg.visualization) {
             console.log(`[loadConversation] Message ${msg.id} has visualization:`, msg.visualization);
           }
-          return msg;
+          
+          // Reconstruct contentParts for messages (Requirement 2.1, 2.2)
+          // This preserves the original execution order when loading from history
+          const reconstructed = reconstructContentParts(msg);
+          if (reconstructed.contentParts) {
+            console.log(`[loadConversation] Reconstructed ${reconstructed.contentParts.length} contentParts for message ${msg.id}`);
+          }
+          
+          return reconstructed;
         });
         
         console.log('[loadConversation] Processed messages:', processedMessages);
         setMessages(processedMessages);
         console.log('[loadConversation] Messages state updated');
+        
+        // Restore visualizations to artifacts panel (Requirements 2.3, 2.4, 2.5)
+        // Check messages for visualizations that were routed to artifacts during streaming
+        let restoredVisualization = false;
+        for (const msg of processedMessages) {
+          if (msg.visualization && msg.visualization.routedToArtifacts) {
+            console.log(`[loadConversation] Restoring visualization from message ${msg.id}:`, msg.visualization);
+            
+            // Reconstruct the artifact from the visualization data
+            const artifact = createArtifactFromVisualization(msg.visualization);
+            if (artifact) {
+              console.log(`[loadConversation] Created artifact from visualization:`, artifact);
+              restoreArtifact(artifact);
+              restoredVisualization = true;
+              // Only restore the most recent routed visualization
+              // (in practice, there should only be one active artifact at a time)
+              break;
+            }
+          }
+        }
+        
+        if (!restoredVisualization) {
+          console.log('[loadConversation] No routed visualizations found in messages');
+        }
       } else {
         console.error('[loadConversation] API request failed:', r.status, r.statusText);
       }
@@ -315,6 +348,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
     }
     
     // Restore artifact from conversation (Requirement 15.6)
+    // This handles artifacts that were persisted separately via the artifact API
     try {
       const artifactRes = await fetch(`/api/conversations/${conv.id}/artifact`);
       if (artifactRes.ok) {
@@ -326,8 +360,10 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
             createdAt: new Date(artifactData.artifact.createdAt),
             updatedAt: new Date(artifactData.artifact.updatedAt),
           };
+          console.log('[loadConversation] Restoring artifact from API:', restoredArtifact);
           restoreArtifact(restoredArtifact);
         } else {
+          console.log('[loadConversation] No artifact found in API response');
           restoreArtifact(null);
         }
       }

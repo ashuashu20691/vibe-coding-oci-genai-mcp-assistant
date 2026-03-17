@@ -3,12 +3,14 @@
  * Data Analysis Agent - Analyzes query results and provides insights.
  */
 
-export const DATA_ANALYSIS_AGENT_INSTRUCTIONS = `You are a data analyst. Given a dataset, produce a concise, accurate analysis.
+export const DATA_ANALYSIS_AGENT_INSTRUCTIONS = `You are a data analyst focused on actionable insights and critical issue detection.
 
 <behavior>
 Work directly with the data provided. Do not ask for more data or suggest running additional queries — analyze what you have.
 
-Prioritize findings that are actionable or surprising. Skip obvious observations.
+Prioritize findings that are actionable, critical, or surprising. Flag critical issues prominently with 🔴, warnings with 🟡, and positive findings with 🟢.
+
+Use specific numbers, percentages, and comparisons to benchmarks. Avoid vague statements like "some items" — say "5 items (23%)".
 
 If the initial data is shallow (e.g., all values identical, no meaningful variance), you may use DDL to build analytical layers:
 - CREATE VIEW to aggregate or join tables for a richer perspective
@@ -18,19 +20,34 @@ Always clean up temporary objects (DROP TABLE/VIEW) after use.
 
 <output_structure>
 Respond with:
-1. A one-sentence summary of what the data shows
-2. Two to four specific findings (numbers, percentages, named entities where relevant)
-3. One or two recommendations based on the findings
+1. A one-sentence summary with key metrics
+2. Three to five specific findings with severity indicators (🔴 critical, 🟡 warning, 🟢 positive)
+3. Two to three actionable recommendations with:
+   - Specific steps to take
+   - Expected outcomes
+   - Target metrics or timelines
 
-Keep the total response under 150 words. Use plain language — no jargon, no filler phrases.
+Keep the total response under 200 words. Use plain language with specific numbers.
 </output_structure>
 
 <analysis_approach>
-For numeric columns: identify the range, average, and any outliers worth noting.
-For categorical columns: identify the dominant category and any notable minorities.
-For time-based data: identify the trend direction and any inflection points.
-For grouped data: identify the top and bottom performers and the gap between them.
-Flag anomalies explicitly — e.g., "EMEA shows 0% on-time delivery — this is a crisis."
+For numeric columns: identify the range, average, outliers, and compare to benchmarks.
+For categorical columns: identify the dominant category, critical minorities, and performance gaps.
+For time-based data: identify the trend direction, inflection points, and seasonal patterns.
+For grouped data: identify top/bottom performers, the gap between them, and items below average.
+
+CRITICAL ISSUE DETECTION:
+- Flag status columns with "delayed", "critical", "fail", "error" as 🔴 CRITICAL
+- Flag zero values in key metrics as 🔴 CRITICAL (possible data issue)
+- Flag large performance gaps (>50%) as 🟡 WARNING
+- Flag items below reorder point as 🔴 CRITICAL
+- Flag outliers (>2 std dev) with severity based on direction
+
+ACTIONABLE RECOMMENDATIONS:
+- Include specific steps (1, 2, 3)
+- Include expected outcomes ("Reduce critical items by 50%")
+- Include target metrics ("Bring to average of X")
+- Include timelines ("within 24 hours", "within 48 hours")
 </analysis_approach>`;
 
 export interface AnalysisRequest {
@@ -131,6 +148,7 @@ function getTopValues(values: unknown[], n: number): Array<{ value: unknown; cou
 
 /**
  * Generate insights — spots anomalies, outliers, top/bottom performers.
+ * Uses 🔴 for critical issues, 🟡 for warnings, 🟢 for positive findings.
  */
 function generateInsights(data: unknown[], statistics: Record<string, unknown>): string[] {
   const insights: string[] = [];
@@ -142,12 +160,49 @@ function generateInsights(data: unknown[], statistics: Record<string, unknown>):
   const numericCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'numeric');
   const catCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'categorical');
 
+  // Check for status/condition columns to detect critical issues
+  const statusCol = columns.find(c => 
+    ['status', 'state', 'condition', 'priority', 'severity'].some(k => c.toLowerCase().includes(k))
+  );
+
+  if (statusCol) {
+    const criticalStatuses = rows.filter(r => {
+      const val = String(r[statusCol]).toLowerCase();
+      return val.includes('delayed') || val.includes('critical') || val.includes('fail') || val.includes('error');
+    });
+    
+    if (criticalStatuses.length > 0) {
+      const percentage = ((criticalStatuses.length / rows.length) * 100).toFixed(1);
+      insights.push(`🔴 CRITICAL: ${criticalStatuses.length} items (${percentage}%) have critical ${statusCol} - immediate action required`);
+    }
+
+    const warningStatuses = rows.filter(r => {
+      const val = String(r[statusCol]).toLowerCase();
+      return val.includes('warning') || val.includes('pending') || val.includes('transit');
+    });
+    
+    if (warningStatuses.length > 0) {
+      const percentage = ((warningStatuses.length / rows.length) * 100).toFixed(1);
+      insights.push(`🟡 WARNING: ${warningStatuses.length} items (${percentage}%) require attention`);
+    }
+
+    const successStatuses = rows.filter(r => {
+      const val = String(r[statusCol]).toLowerCase();
+      return val.includes('success') || val.includes('delivered') || val.includes('complete') || val.includes('active');
+    });
+    
+    if (successStatuses.length > 0) {
+      const percentage = ((successStatuses.length / rows.length) * 100).toFixed(1);
+      insights.push(`🟢 ${successStatuses.length} items (${percentage}%) operating normally`);
+    }
+  }
+
   if (numericCols.length > 0 && catCols.length > 0) {
     const metricCol = numericCols[0];
     const labelCol = catCols[0];
     const stats = columnStats[metricCol] as { avg: number; min: number; max: number; sum: number };
 
-    // Top and bottom performers
+    // Top and bottom performers with percentage comparison
     const sorted = [...rows].sort((a, b) => (Number(b[metricCol]) || 0) - (Number(a[metricCol]) || 0));
     const top = sorted[0];
     const bottom = sorted[sorted.length - 1];
@@ -155,44 +210,70 @@ function generateInsights(data: unknown[], statistics: Record<string, unknown>):
     if (top && bottom) {
       const topVal = Number(top[metricCol]);
       const bottomVal = Number(bottom[metricCol]);
-      insights.push(`Top performer: ${top[labelCol]} (${topVal.toLocaleString()})`);
+      const avgVal = stats.avg;
+      
+      // Top performer with comparison to average
+      const topVsAvg = avgVal > 0 ? (((topVal - avgVal) / avgVal) * 100).toFixed(1) : '0';
+      insights.push(`🟢 Top performer: ${top[labelCol]} (${topVal.toLocaleString()}) - ${topVsAvg}% above average`);
+      
       if (bottomVal === 0) {
-        insights.push(`⚠️ ${bottom[labelCol]} has zero ${metricCol} — possible data issue or complete underperformance`);
+        insights.push(`🔴 CRITICAL: ${bottom[labelCol]} has zero ${metricCol} — complete failure or missing data`);
       } else {
-        insights.push(`Bottom performer: ${bottom[labelCol]} (${bottomVal.toLocaleString()})`);
+        const bottomVsAvg = avgVal > 0 ? (((avgVal - bottomVal) / avgVal) * 100).toFixed(1) : '0';
+        insights.push(`🔴 Bottom performer: ${bottom[labelCol]} (${bottomVal.toLocaleString()}) - ${bottomVsAvg}% below average`);
       }
     }
 
-    // Zero-value anomalies
+    // Zero-value anomalies with severity
     const zeroRows = rows.filter(r => Number(r[metricCol]) === 0);
     if (zeroRows.length > 0 && zeroRows.length < rows.length) {
-      const zeroLabels = zeroRows.map(r => r[labelCol]).join(', ');
-      insights.push(`🚨 ${zeroRows.length} group(s) with zero ${metricCol}: ${zeroLabels}`);
+      const zeroLabels = zeroRows.slice(0, 5).map(r => r[labelCol]).join(', ');
+      const moreText = zeroRows.length > 5 ? ` and ${zeroRows.length - 5} more` : '';
+      const percentage = ((zeroRows.length / rows.length) * 100).toFixed(1);
+      insights.push(`🔴 CRITICAL: ${zeroRows.length} groups (${percentage}%) with zero ${metricCol}: ${zeroLabels}${moreText}`);
     }
 
-    // Outliers: > 2 standard deviations from mean
+    // Outliers with specific values and benchmarks
     if (stats.avg > 0) {
       const values = rows.map(r => Number(r[metricCol]) || 0);
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       const stdDev = Math.sqrt(values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length);
       const outliers = rows.filter(r => Math.abs((Number(r[metricCol]) || 0) - mean) > 2 * stdDev);
+      
       if (outliers.length > 0 && outliers.length <= 3) {
         outliers.forEach(r => {
           const val = Number(r[metricCol]);
+          const deviation = ((Math.abs(val - mean) / mean) * 100).toFixed(0);
           const direction = val > mean ? 'above' : 'below';
-          insights.push(`Outlier: ${r[labelCol]} is significantly ${direction} average (${val.toLocaleString()} vs avg ${mean.toFixed(0)})`);
+          const emoji = val > mean ? '🟢' : '🔴';
+          insights.push(`${emoji} Outlier: ${r[labelCol]} is ${deviation}% ${direction} average (${val.toLocaleString()} vs ${mean.toFixed(0)})`);
         });
+      }
+    }
+
+    // Performance gap analysis
+    if (sorted.length >= 2) {
+      const topVal = Number(sorted[0][metricCol]);
+      const bottomVal = Number(sorted[sorted.length - 1][metricCol]);
+      if (topVal > 0 && bottomVal >= 0) {
+        const gap = topVal - bottomVal;
+        const gapPercentage = ((gap / topVal) * 100).toFixed(1);
+        if (Number(gapPercentage) > 50) {
+          insights.push(`🟡 Large performance gap: ${gapPercentage}% difference between top and bottom ${labelCol}`);
+        }
       }
     }
   }
 
-  // Single numeric column — report spread
+  // Single numeric column — report spread with severity
   if (numericCols.length > 0 && catCols.length === 0) {
     const col = numericCols[0];
     const stats = columnStats[col] as { avg: number; min: number; max: number };
     const range = stats.max - stats.min;
+    const rangePercentage = stats.avg > 0 ? ((range / stats.avg) * 100).toFixed(0) : '0';
+    
     if (range > stats.avg * 3) {
-      insights.push(`High spread in ${col}: min ${stats.min.toLocaleString()}, max ${stats.max.toLocaleString()}, avg ${stats.avg.toFixed(0)}`);
+      insights.push(`🟡 High variability in ${col}: ${rangePercentage}% range (min: ${stats.min.toLocaleString()}, max: ${stats.max.toLocaleString()}, avg: ${stats.avg.toFixed(0)})`);
     }
   }
 
@@ -200,7 +281,7 @@ function generateInsights(data: unknown[], statistics: Record<string, unknown>):
 }
 
 /**
- * Generate recommendations based on actual data patterns.
+ * Generate actionable recommendations with specific steps and expected outcomes.
  */
 function generateRecommendations(
   data: unknown[],
@@ -217,33 +298,116 @@ function generateRecommendations(
   const catCols = columns.filter(c => (columnStats[c] as { type: string }).type === 'categorical');
   const dateCols = columns.filter(c => c.toLowerCase().includes('date') || c.toLowerCase().includes('time'));
 
-  if (numericCols.length > 0 && catCols.length > 0) {
-    const metricCol = numericCols[0];
-    const labelCol = catCols[0];
+  // Check for critical status issues
+  const statusCol = columns.find(c => 
+    ['status', 'state', 'condition', 'priority', 'severity'].some(k => c.toLowerCase().includes(k))
+  );
 
-    // Recommend investigating zero-value groups
-    const zeroRows = rows.filter(r => Number(r[metricCol]) === 0);
-    if (zeroRows.length > 0) {
-      recommendations.push(`Investigate ${zeroRows.length} group(s) with zero ${metricCol} — may indicate missing data or a systemic issue`);
-    }
+  if (statusCol) {
+    const criticalRows = rows.filter(r => {
+      const val = String(r[statusCol]).toLowerCase();
+      return val.includes('delayed') || val.includes('critical') || val.includes('fail') || val.includes('error');
+    });
 
-    // Recommend comparing top vs bottom if large gap
-    const sorted = [...rows].sort((a, b) => (Number(b[metricCol]) || 0) - (Number(a[metricCol]) || 0));
-    if (sorted.length >= 2) {
-      const topVal = Number(sorted[0][metricCol]);
-      const bottomVal = Number(sorted[sorted.length - 1][metricCol]);
-      if (topVal > 0 && bottomVal >= 0 && topVal / Math.max(bottomVal, 1) > 3) {
-        recommendations.push(`Large gap between top and bottom ${labelCol} — consider targeted intervention for underperformers`);
+    if (criticalRows.length > 0) {
+      const labelCol = catCols[0];
+      if (labelCol) {
+        const affectedGroups = [...new Set(criticalRows.map(r => String(r[labelCol])))];
+        recommendations.push(
+          `🔴 IMMEDIATE ACTION: Investigate ${affectedGroups.length} affected ${labelCol}(s) with critical ${statusCol}. ` +
+          `Expected outcome: Reduce critical items by 50% within 24 hours. ` +
+          `Steps: 1) Contact ${affectedGroups.slice(0, 3).join(', ')} 2) Identify root cause 3) Implement fix`
+        );
+      } else {
+        recommendations.push(
+          `🔴 IMMEDIATE ACTION: Address ${criticalRows.length} critical ${statusCol} items. ` +
+          `Expected outcome: Resolve all critical issues within 48 hours`
+        );
       }
     }
   }
 
+  if (numericCols.length > 0 && catCols.length > 0) {
+    const metricCol = numericCols[0];
+    const labelCol = catCols[0];
+
+    // Recommend investigating zero-value groups with specific actions
+    const zeroRows = rows.filter(r => Number(r[metricCol]) === 0);
+    if (zeroRows.length > 0) {
+      const zeroLabels = zeroRows.slice(0, 3).map(r => String(r[labelCol])).join(', ');
+      const moreText = zeroRows.length > 3 ? ` and ${zeroRows.length - 3} more` : '';
+      recommendations.push(
+        `🔴 DATA QUALITY: Investigate ${zeroRows.length} ${labelCol}(s) with zero ${metricCol} (${zeroLabels}${moreText}). ` +
+        `Expected outcome: Identify if this is missing data or actual zero values. ` +
+        `Steps: 1) Verify data source 2) Check for data pipeline issues 3) Update or backfill if needed`
+      );
+    }
+
+    // Recommend comparing top vs bottom with specific targets
+    const sorted = [...rows].sort((a, b) => (Number(b[metricCol]) || 0) - (Number(a[metricCol]) || 0));
+    if (sorted.length >= 2) {
+      const topVal = Number(sorted[0][metricCol]);
+      const bottomVal = Number(sorted[sorted.length - 1][metricCol]);
+      const avgVal = (columnStats[metricCol] as { avg: number }).avg;
+      
+      if (topVal > 0 && bottomVal >= 0 && topVal / Math.max(bottomVal, 1) > 3) {
+        const bottomLabel = sorted[sorted.length - 1][labelCol];
+        const targetImprovement = ((avgVal - bottomVal) / bottomVal * 100).toFixed(0);
+        recommendations.push(
+          `🟡 PERFORMANCE GAP: Large disparity between top and bottom ${labelCol}. ` +
+          `Target: Improve ${bottomLabel} by ${targetImprovement}% to reach average performance. ` +
+          `Steps: 1) Analyze top performer practices 2) Identify bottlenecks in underperformers 3) Implement best practices`
+        );
+      }
+    }
+
+    // Benchmark recommendations
+    const stats = columnStats[metricCol] as { avg: number; max: number };
+    const belowAverage = rows.filter(r => Number(r[metricCol]) < stats.avg);
+    if (belowAverage.length > rows.length / 2) {
+      const percentage = ((belowAverage.length / rows.length) * 100).toFixed(0);
+      recommendations.push(
+        `🟡 BENCHMARK: ${percentage}% of ${labelCol}s are below average ${metricCol}. ` +
+        `Target: Bring bottom 50% up to average (${stats.avg.toFixed(0)}). ` +
+        `Expected impact: ${((stats.avg * belowAverage.length) - belowAverage.reduce((sum, r) => sum + Number(r[metricCol]), 0)).toFixed(0)} total ${metricCol} increase`
+      );
+    }
+  }
+
   if (dateCols.length > 0 && numericCols.length > 0) {
-    recommendations.push(`Trend analysis available — filter by ${dateCols[0]} to see performance over time`);
+    const dateCol = dateCols[0];
+    const metricCol = numericCols[0];
+    recommendations.push(
+      `📊 TREND ANALYSIS: Filter by ${dateCol} to identify performance trends over time. ` +
+      `Expected outcome: Identify seasonal patterns or declining trends requiring intervention`
+    );
+  }
+
+  // Check for inventory-specific recommendations
+  const qtyCol = columns.find(c => c.toLowerCase().includes('qty') || c.toLowerCase().includes('quantity') || c.toLowerCase().includes('stock'));
+  const reorderCol = columns.find(c => c.toLowerCase().includes('reorder'));
+  
+  if (qtyCol && reorderCol) {
+    const lowStock = rows.filter(r => Number(r[qtyCol]) <= Number(r[reorderCol]));
+    if (lowStock.length > 0) {
+      const labelCol = catCols[0];
+      const affectedItems = lowStock.slice(0, 3).map(r => String(r[labelCol])).join(', ');
+      const moreText = lowStock.length > 3 ? ` and ${lowStock.length - 3} more` : '';
+      recommendations.push(
+        `🔴 INVENTORY: ${lowStock.length} items at or below reorder point (${affectedItems}${moreText}). ` +
+        `IMMEDIATE ACTION: Place reorder within 24 hours to prevent stockouts. ` +
+        `Expected outcome: Restore inventory to safe levels within lead time`
+      );
+    }
   }
 
   if (recommendations.length === 0 && numericCols.length > 0) {
-    recommendations.push(`Compare ${numericCols[0]} across different segments for deeper insight`);
+    const metricCol = numericCols[0];
+    const stats = columnStats[metricCol] as { avg: number };
+    recommendations.push(
+      `📊 DEEP DIVE: Compare ${metricCol} across different segments to identify optimization opportunities. ` +
+      `Target: Identify segments performing below ${stats.avg.toFixed(0)} average and develop improvement plans`
+    );
   }
 
   return recommendations;

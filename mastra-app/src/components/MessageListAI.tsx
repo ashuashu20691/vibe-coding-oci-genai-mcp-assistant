@@ -227,13 +227,13 @@ export function MessageListAI({
       aria-live="polite"
       aria-atomic="false"
     >
-      <div className="pt-8">
-        <div className="max-w-4xl mx-auto px-6">
+      <div className="pt-8" style={(!messages || messages.length === 0) && !isLoading ? { display: 'flex', flexDirection: 'column', height: '100%' } : undefined}>
+        <div className="max-w-7xl mx-auto px-12" style={(!messages || messages.length === 0) && !isLoading ? { flex: 1, display: 'flex', flexDirection: 'column' } : undefined}>
           {/* Welcome screen when no messages - Validates: Requirement 1.6 */}
           {(!messages || messages.length === 0) && !isLoading && (
             <WelcomeScreen onSuggestionClick={onSuggestionClick} />
           )}
-
+  
           {/* Skeleton loader while loading initial messages - Task 9.5 */}
           {isLoading && (!messages || messages.length === 0) && (
             <SkeletonLoader variant="message" count={2} />
@@ -461,86 +461,76 @@ const MessageItem = memo(function MessageItem({
   );
 });
 
+// Suggestion prompts for the welcome screen
+const WELCOME_SUGGESTIONS = [
+  {
+    icon: (
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5" />
+      </svg>
+    ),
+    label: 'Show me all tables in the database',
+    prompt: 'List all tables in the database',
+  },
+  {
+    icon: (
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+      </svg>
+    ),
+    label: 'Create a sales dashboard',
+    prompt: 'Create a sales dashboard',
+  },
+  {
+    icon: (
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
+      </svg>
+    ),
+    label: 'Display orders trend over time',
+    prompt: 'Display orders trend over time',
+  },
+  {
+    icon: (
+      <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+      </svg>
+    ),
+    label: 'Top suppliers by delivery performance',
+    prompt: 'Show me top suppliers by delivery performance',
+  },
+];
+
 // Memoize WelcomeScreen to prevent unnecessary re-renders
 const WelcomeScreen = memo(function WelcomeScreen({ onSuggestionClick }: { onSuggestionClick?: (s: string) => void }) {
-  const suggestions = useMemo(() => [
-    {
-      text: 'Analyze supplier performance data',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-        </svg>
-      ),
-      category: 'Supplier Analysis',
-    },
-    {
-      text: 'Detect anomalies in power consumption',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-        </svg>
-      ),
-      category: 'Power Theft Detection',
-    },
-    {
-      text: 'Find similar images in the database',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-      ),
-      category: 'Photo Similarity',
-    },
-    {
-      text: 'Identify potential fraud patterns',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-      ),
-      category: 'Fraud Detection',
-    },
-  ], []);
-
   return (
     <div className="welcome-screen">
       <div className="welcome-content">
         <div className="welcome-orb">
           <div className="welcome-orb-inner">
             <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125v-3.75" />
             </svg>
           </div>
         </div>
 
         <h1 className="welcome-title">
-          How can I help you today?
+          What would you like to explore?
         </h1>
         <p className="welcome-subtitle">
-          Analyze databases, detect anomalies, and create visualizations using Oracle Database 23ai features.
+          Ask me anything about your data — I can query tables, build dashboards, spot trends, and surface insights.
         </p>
 
         <div className="welcome-suggestions">
-          {suggestions.map((suggestion) => (
+          {WELCOME_SUGGESTIONS.map((suggestion) => (
             <button
-              key={suggestion.text}
-              onClick={() => onSuggestionClick?.(suggestion.text)}
-              className="welcome-suggestion-btn"
+              key={suggestion.prompt}
+              className="welcome-suggestion-chip"
+              onClick={() => onSuggestionClick?.(suggestion.prompt)}
+              type="button"
             >
-              <div className="welcome-suggestion-icon">
-                {suggestion.icon}
-              </div>
-              <div className="welcome-suggestion-text">
-                <span className="welcome-suggestion-category">
-                  {suggestion.category}
-                </span>
-                <span className="welcome-suggestion-label">
-                  {suggestion.text}
-                </span>
-              </div>
-              <svg className="welcome-suggestion-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
+              <span className="welcome-suggestion-icon">{suggestion.icon}</span>
+              <span>{suggestion.label}</span>
             </button>
           ))}
         </div>

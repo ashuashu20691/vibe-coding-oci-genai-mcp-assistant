@@ -669,7 +669,8 @@ function generateTable(
 }
 
 /**
- * Generate interactive HTML dashboard.
+ * Generate interactive HTML dashboard with Claude Desktop-quality styling.
+ * Includes: critical alerts, metric cards, multiple charts, data table.
  */
 function generateInteractiveHTML(
   data: unknown,
@@ -704,51 +705,159 @@ function generateInteractiveHTML(
     ['status', 'state', 'priority', 'severity', 'condition'].some(k => c.toLowerCase().includes(k))
   );
 
-  // Build stats cards
-  const stats: Array<{ label: string; value: string; color: string; detail?: string }> = [
-    { label: 'Total Records', value: String(dataArray.length), color: '#3b82f6', detail: '' }
+  // CRITICAL ALERTS DETECTION
+  const alerts: Array<{ message: string; severity: 'critical' | 'warning' | 'info' }> = [];
+  let criticalCount = 0;
+  let warningCount = 0;
+
+  if (statusCol) {
+    const critical = dataArray.filter(r => {
+      const val = String((r as Record<string, unknown>)[statusCol]).toLowerCase();
+      return val.includes('delayed') || val.includes('critical') || val.includes('fail') || val.includes('error');
+    });
+    const warnings = dataArray.filter(r => {
+      const val = String((r as Record<string, unknown>)[statusCol]).toLowerCase();
+      return val.includes('warning') || val.includes('pending') || val.includes('transit');
+    });
+    
+    criticalCount = critical.length;
+    warningCount = warnings.length;
+
+    if (critical.length > 0) {
+      // Find region/location if available
+      const regionCol = columns.find(c => c.toLowerCase().includes('region') || c.toLowerCase().includes('location'));
+      if (regionCol) {
+        const regions: Record<string, number> = {};
+        critical.forEach(r => {
+          const reg = String((r as Record<string, unknown>)[regionCol]);
+          regions[reg] = (regions[reg] || 0) + 1;
+        });
+        const topRegion = Object.entries(regions).sort((a, b) => b[1] - a[1])[0];
+        alerts.push({
+          message: `${critical.length} ${statusCol} Issues in ${topRegion[0]} Region`,
+          severity: 'critical'
+        });
+      } else {
+        alerts.push({
+          message: `${critical.length} Items with Critical ${statusCol}`,
+          severity: 'critical'
+        });
+      }
+    }
+
+    if (warnings.length > 0) {
+      alerts.push({
+        message: `${warnings.length} Items Require Attention`,
+        severity: 'warning'
+      });
+    }
+  }
+
+  // Check for low inventory
+  const qtyCol = columns.find(c => c.toLowerCase().includes('qty') || c.toLowerCase().includes('quantity') || c.toLowerCase().includes('stock'));
+  const reorderCol = columns.find(c => c.toLowerCase().includes('reorder'));
+  if (qtyCol && reorderCol) {
+    const lowStock = dataArray.filter(r => {
+      const qty = Number((r as Record<string, unknown>)[qtyCol]) || 0;
+      const reorder = Number((r as Record<string, unknown>)[reorderCol]) || 0;
+      return qty <= reorder;
+    });
+    if (lowStock.length > 0) {
+      alerts.push({
+        message: `${lowStock.length} Items Below Reorder Point`,
+        severity: 'critical'
+      });
+      criticalCount += lowStock.length;
+    }
+  }
+
+  // METRIC CARDS (4-column grid)
+  interface MetricCard {
+    label: string;
+    value: string;
+    color: 'blue' | 'red' | 'orange' | 'green';
+    detail?: string;
+    icon?: string;
+  }
+
+  const metrics: MetricCard[] = [
+    { label: 'TOTAL RECORDS', value: String(dataArray.length), color: 'blue', icon: '📊' }
   ];
 
-  for (const col of numericCols.slice(0, 3)) {
+  if (criticalCount > 0) {
+    metrics.push({
+      label: 'CRITICAL ITEMS',
+      value: String(criticalCount),
+      color: 'red',
+      detail: '▲ Requires immediate action',
+      icon: '🚨'
+    });
+  }
+
+  if (warningCount > 0) {
+    metrics.push({
+      label: 'WARNING ITEMS',
+      value: String(warningCount),
+      color: 'orange',
+      detail: '⚠️ Needs attention',
+      icon: '⚠️'
+    });
+  }
+
+  // Add numeric metrics
+  for (const col of numericCols.slice(0, 2)) {
     const values = dataArray.map(r => Number((r as Record<string, unknown>)[col]) || 0);
     const total = values.reduce((a, b) => a + b, 0);
     const avg = total / values.length;
-    stats.push({
-      label: `Total ${col.replace(/_/g, ' ')}`,
-      value: total % 1 === 0 ? total.toLocaleString() : total.toFixed(2),
-      color: '#10b981',
-      detail: `Avg: ${avg.toFixed(1)}`
+    metrics.push({
+      label: col.replace(/_/g, ' ').toUpperCase(),
+      value: total % 1 === 0 ? total.toLocaleString() : total.toFixed(1),
+      color: 'green',
+      detail: `Avg: ${avg.toFixed(1)}`,
+      icon: '💰'
     });
   }
 
-  if (statusCol) {
-    const counts: Record<string, number> = {};
-    dataArray.forEach(r => {
-      const v = String((r as Record<string, unknown>)[statusCol]);
-      counts[v] = (counts[v] || 0) + 1;
+  // Pad to 4 cards
+  while (metrics.length < 4) {
+    const successCount = dataArray.length - criticalCount - warningCount;
+    metrics.push({
+      label: 'HEALTHY ITEMS',
+      value: String(successCount),
+      color: 'green',
+      detail: '✓ Operating normally',
+      icon: '✅'
     });
-    const critical = Object.entries(counts).filter(([k]) =>
-      /delayed|critical|fail|error|overdue/i.test(k)
-    );
-    if (critical.length > 0) {
-      const critCount = critical.reduce((s, [, c]) => s + c, 0);
-      stats.push({ label: 'Critical Items', value: String(critCount), color: '#ef4444', detail: critical.map(([k, v]) => `${k}: ${v}`).join(', ') });
-    }
   }
 
-  // Build alerts
-  const alerts: string[] = [];
-  if (statusCol) {
-    const delayed = dataArray.filter(r => /delayed|critical|fail/i.test(String((r as Record<string, unknown>)[statusCol])));
-    if (delayed.length > 0) {
-      alerts.push(`⚠️ ${delayed.length} items have critical/delayed status`);
-    }
-  }
-
-  // Build charts config
+  // CHARTS (2x2 grid)
   const charts: Array<{ id: string; title: string; type: string; config: string }> = [];
 
-  // Chart 1: Category breakdown (bar)
+  // Chart 1: Status distribution (doughnut)
+  if (statusCol) {
+    const counts: Record<string, number> = {};
+    dataArray.forEach(r => { const v = String((r as Record<string, unknown>)[statusCol]); counts[v] = (counts[v] || 0) + 1; });
+    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const statusColors = entries.map(([k]) => {
+      const kl = k.toLowerCase();
+      if (kl.includes('delayed') || kl.includes('critical') || kl.includes('fail')) return '#ef4444';
+      if (kl.includes('warning') || kl.includes('pending')) return '#f59e0b';
+      if (kl.includes('success') || kl.includes('delivered') || kl.includes('complete')) return '#10b981';
+      return '#3b82f6';
+    });
+    charts.push({
+      id: 'chart_status',
+      title: `${statusCol.replace(/_/g, ' ')} Distribution`,
+      type: 'doughnut',
+      config: JSON.stringify({
+        type: 'doughnut',
+        data: { labels: entries.map(([k]) => k), datasets: [{ data: entries.map(([, v]) => v), backgroundColor: statusColors, borderWidth: 2, borderColor: '#1e293b' }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#cbd5e1', padding: 12, font: { size: 11 } } } } }
+      })
+    });
+  }
+
+  // Chart 2: Category breakdown (bar)
   const catCol = categoryCols[0];
   const metricCol = numericCols[0];
   if (catCol && metricCol) {
@@ -758,42 +867,19 @@ function generateInteractiveHTML(
       const key = String(row[catCol]);
       agg[key] = (agg[key] || 0) + (Number(row[metricCol]) || 0);
     });
-    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 12);
-    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#e11d48'];
+    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
     charts.push({
       id: 'chart_bar',
-      title: `${metricCol.replace(/_/g, ' ')} by ${catCol.replace(/_/g, ' ')}`,
+      title: `Top ${catCol.replace(/_/g, ' ')} by ${metricCol.replace(/_/g, ' ')}`,
       type: 'bar',
       config: JSON.stringify({
         type: 'bar',
         data: {
           labels: sorted.map(([k]) => k),
-          datasets: [{ label: metricCol, data: sorted.map(([, v]) => v), backgroundColor: colors.slice(0, sorted.length), borderRadius: 6 }]
+          datasets: [{ label: metricCol, data: sorted.map(([, v]) => v), backgroundColor: colors.slice(0, sorted.length), borderRadius: 8, borderWidth: 0 }]
         },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
-      })
-    });
-  }
-
-  // Chart 2: Status distribution (doughnut)
-  if (statusCol) {
-    const counts: Record<string, number> = {};
-    dataArray.forEach(r => { const v = String((r as Record<string, unknown>)[statusCol]); counts[v] = (counts[v] || 0) + 1; });
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const statusColors = entries.map(([k]) => {
-      if (/delayed|critical|fail|error/i.test(k)) return '#ef4444';
-      if (/warning|pending|transit/i.test(k)) return '#f59e0b';
-      if (/success|delivered|complete|active|on.?time/i.test(k)) return '#10b981';
-      return '#6366f1';
-    });
-    charts.push({
-      id: 'chart_status',
-      title: `${statusCol.replace(/_/g, ' ')} Distribution`,
-      type: 'doughnut',
-      config: JSON.stringify({
-        type: 'doughnut',
-        data: { labels: entries.map(([k]) => k), datasets: [{ data: entries.map(([, v]) => v), backgroundColor: statusColors, borderWidth: 0 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', padding: 12 } } } }
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
       })
     });
   }
@@ -802,45 +888,45 @@ function generateInteractiveHTML(
   const dateCol = dateCols[0];
   if (dateCol && metricCol) {
     const sorted = [...dataArray].sort((a, b) => String((a as Record<string, unknown>)[dateCol]).localeCompare(String((b as Record<string, unknown>)[dateCol])));
-    const labels = sorted.slice(0, 50).map(r => String((r as Record<string, unknown>)[dateCol]));
-    const values = sorted.slice(0, 50).map(r => Number((r as Record<string, unknown>)[metricCol]) || 0);
+    const labels = sorted.slice(0, 30).map(r => String((r as Record<string, unknown>)[dateCol]));
+    const values = sorted.slice(0, 30).map(r => Number((r as Record<string, unknown>)[metricCol]) || 0);
     charts.push({
       id: 'chart_trend',
-      title: `${metricCol.replace(/_/g, ' ')} Over Time`,
+      title: `${metricCol.replace(/_/g, ' ')} Trend Over Time`,
       type: 'line',
       config: JSON.stringify({
         type: 'line',
-        data: { labels, datasets: [{ label: metricCol, data: values, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, pointRadius: 2 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 10 } } } }
+        data: { labels, datasets: [{ label: metricCol, data: values, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.4, pointRadius: 3, pointHoverRadius: 6, borderWidth: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45, maxTicksLimit: 8 } } } }
       })
     });
   }
 
-  // Chart 4: Second metric bar if available
+  // Chart 4: Second metric if available
   if (catCol && numericCols.length > 1) {
     const metric2 = numericCols[1];
     const agg: Record<string, number> = {};
     dataArray.forEach(r => { const row = r as Record<string, unknown>; agg[String(row[catCol])] = (agg[String(row[catCol])] || 0) + (Number(row[metric2]) || 0); });
-    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    const sorted = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 10);
     charts.push({
       id: 'chart_bar2',
       title: `${metric2.replace(/_/g, ' ')} by ${catCol.replace(/_/g, ' ')}`,
       type: 'bar',
       config: JSON.stringify({
         type: 'bar',
-        data: { labels: sorted.map(([k]) => k), datasets: [{ label: metric2, data: sorted.map(([, v]) => v), backgroundColor: '#8b5cf6', borderRadius: 6 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
+        data: { labels: sorted.map(([k]) => k), datasets: [{ label: metric2, data: sorted.map(([, v]) => v), backgroundColor: '#8b5cf6', borderRadius: 8, borderWidth: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 45 } } } }
       })
     });
   }
 
-  // Build table rows (first 20)
+  // DATA TABLE (first 20 rows, max 8 columns)
   const displayCols = columns.slice(0, 8);
   const tableRows = dataArray.slice(0, 20);
 
-  // Generate the HTML
-  const dashTitle = title || 'Interactive Dashboard';
-  const html = buildDashboardHTML(dashTitle, stats, alerts, charts, displayCols, tableRows);
+  // Generate HTML
+  const dashTitle = title || 'Supply Chain Operations Dashboard';
+  const html = buildClaudeDesktopStyleHTML(dashTitle, alerts, metrics, charts, displayCols, tableRows, statusCol);
 
   return {
     type: 'html',
@@ -938,6 +1024,304 @@ ${alertsHTML}
 </div>
 </div>
 <script>${chartScripts}<\/script>
+</body>
+</html>`;
+}
+
+/**
+ * Build Claude Desktop-style HTML dashboard with modern styling.
+ */
+function buildClaudeDesktopStyleHTML(
+  title: string,
+  alerts: Array<{ message: string; severity: 'critical' | 'warning' | 'info' }>,
+  metrics: Array<{ label: string; value: string; color: 'blue' | 'red' | 'orange' | 'green'; detail?: string; icon?: string }>,
+  charts: Array<{ id: string; title: string; type: string; config: string }>,
+  displayCols: string[],
+  tableRows: unknown[],
+  statusCol?: string
+): string {
+  // Critical alerts banner (animated)
+  const alertsHTML = alerts.length > 0
+    ? `<div class="alert-banner ${alerts[0].severity}">
+        <div class="alert-icon">⚠️</div>
+        <div class="alert-content">
+          <div class="alert-title">Critical Issues Detected</div>
+          ${alerts.map(a => `<div class="alert-message">${a.message}</div>`).join('')}
+        </div>
+      </div>`
+    : '';
+
+  // Metric cards (4-column grid)
+  const metricsHTML = metrics.map(m => {
+    const colorClass = m.color;
+    return `<div class="metric-card ${colorClass}">
+      <div class="metric-icon">${m.icon || '📊'}</div>
+      <div class="metric-value">${m.value}</div>
+      <div class="metric-label">${m.label}</div>
+      ${m.detail ? `<div class="metric-detail">${m.detail}</div>` : ''}
+    </div>`;
+  }).join('\n');
+
+  // Charts (2x2 grid)
+  const chartsHTML = charts.map(c =>
+    `<div class="chart-card">
+      <h3>${c.title}</h3>
+      <div class="chart-container">
+        <canvas id="${c.id}"></canvas>
+      </div>
+    </div>`
+  ).join('\n');
+
+  const chartScripts = charts.map(c =>
+    `new Chart(document.getElementById('${c.id}'), ${c.config});`
+  ).join('\n');
+
+  // Data table
+  const theadHTML = displayCols.map(c => `<th>${c.replace(/_/g, ' ')}</th>`).join('');
+  const tbodyHTML = tableRows.map(r => {
+    const row = r as Record<string, unknown>;
+    return '<tr>' + displayCols.map(c => {
+      const val = String(row[c] ?? '');
+      let cls = '';
+      if (statusCol && c === statusCol) {
+        const vl = val.toLowerCase();
+        if (vl.includes('delayed') || vl.includes('critical') || vl.includes('fail')) cls = ' class="status-critical"';
+        else if (vl.includes('warning') || vl.includes('pending')) cls = ' class="status-warning"';
+        else if (vl.includes('success') || vl.includes('delivered') || vl.includes('complete')) cls = ' class="status-success"';
+      }
+      return `<td${cls}>${val}</td>`;
+    }).join('') + '</tr>';
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"><\/script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      color: #fff;
+    }
+    .dashboard { max-width: 1400px; margin: 0 auto; }
+    
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+      border-radius: 16px;
+      padding: 24px 32px;
+      margin-bottom: 24px;
+      backdrop-filter: blur(10px);
+    }
+    .header h1 {
+      font-size: 2em;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .header p {
+      opacity: 0.9;
+      font-size: 0.95em;
+    }
+    
+    /* Critical Alerts Banner */
+    .alert-banner {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      animation: pulse 2s infinite;
+      box-shadow: 0 8px 32px rgba(239, 68, 68, 0.3);
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.95; transform: scale(0.995); }
+    }
+    .alert-icon {
+      font-size: 2em;
+      animation: shake 0.5s infinite;
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-2px); }
+      75% { transform: translateX(2px); }
+    }
+    .alert-content { flex: 1; }
+    .alert-title {
+      font-size: 1.1em;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .alert-message {
+      font-size: 0.95em;
+      opacity: 0.95;
+    }
+    
+    /* Metric Cards */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .metric-card {
+      background: rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .metric-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 24px rgba(0,0,0,0.2);
+    }
+    .metric-icon {
+      font-size: 2em;
+      margin-bottom: 8px;
+    }
+    .metric-value {
+      font-size: 2.5em;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+    .metric-label {
+      font-size: 0.75em;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+    }
+    .metric-detail {
+      font-size: 0.85em;
+      opacity: 0.8;
+      margin-top: 4px;
+    }
+    .metric-card.red .metric-value { color: #fca5a5; }
+    .metric-card.orange .metric-value { color: #fcd34d; }
+    .metric-card.green .metric-value { color: #86efac; }
+    .metric-card.blue .metric-value { color: #93c5fd; }
+    
+    /* Charts Grid */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .chart-card {
+      background: rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    .chart-card h3 {
+      font-size: 1em;
+      font-weight: 600;
+      margin-bottom: 16px;
+      opacity: 0.95;
+    }
+    .chart-container {
+      height: 280px;
+      position: relative;
+    }
+    
+    /* Data Table */
+    .table-card {
+      background: rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 20px;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.2);
+      overflow-x: auto;
+    }
+    .table-card h3 {
+      font-size: 1em;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9em;
+    }
+    th {
+      background: rgba(255,255,255,0.1);
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 2px solid rgba(255,255,255,0.2);
+    }
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    tr:hover td {
+      background: rgba(255,255,255,0.05);
+    }
+    .status-critical {
+      color: #fca5a5;
+      font-weight: 600;
+    }
+    .status-warning {
+      color: #fcd34d;
+      font-weight: 600;
+    }
+    .status-success {
+      color: #86efac;
+      font-weight: 600;
+    }
+    
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+      .charts-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .metrics-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard">
+    <div class="header">
+      <h1>📊 ${title}</h1>
+      <p>Last Updated: ${new Date().toLocaleString()} • Real-Time Data</p>
+    </div>
+    
+    ${alertsHTML}
+    
+    <div class="metrics-grid">
+      ${metricsHTML}
+    </div>
+    
+    <div class="charts-grid">
+      ${chartsHTML}
+    </div>
+    
+    <div class="table-card">
+      <h3>📋 Detailed Records (Top ${tableRows.length})</h3>
+      <table>
+        <thead><tr>${theadHTML}</tr></thead>
+        <tbody>${tbodyHTML}</tbody>
+      </table>
+    </div>
+  </div>
+  
+  <script>
+    ${chartScripts}
+  <\/script>
 </body>
 </html>`;
 }

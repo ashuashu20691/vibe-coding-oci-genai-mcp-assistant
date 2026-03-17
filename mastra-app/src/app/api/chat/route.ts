@@ -366,7 +366,7 @@ export async function POST(request: NextRequest) {
       provider: ociProvider,
       modelId,
       temperature: 0,
-      maxTokens: 8000, // Increased to prevent cutoff during data generation workflows
+      maxTokens: 12000, // Increased to prevent cutoff during complex workflows with analysis and visualization
       conversationId: conversationId || 'default',
     });
 
@@ -446,9 +446,10 @@ export async function POST(request: NextRequest) {
     // Check if clarification is needed - in autonomous mode, almost never
     const clarificationPrompt = generateClarificationPrompt(userIntent);
 
-    // DISABLED: Auto-visualization detection - let agent handle conversationally
-    // The agent will decide when to show visualizations based on conversation flow
-    const isVisualizationRequest = false;
+    // Enable visualization detection for dashboard requests
+    // The visualization agent will generate Claude Desktop-quality dashboards
+    const isVisualizationRequest = !!(userIntent.visualizationType) ||
+      lastUserMessage.match(/\b(dashboard|visual|chart|graph|plot)\b/i) !== null;
 
     // Create streaming response
     const encoder = new TextEncoder();
@@ -829,12 +830,26 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
           const chatMessages = toChatMessages(messages);
 
           // Configure stream options for tool execution
+          // CRITICAL FIX: Increase maxSteps for complex workflows (visualization, analysis, multi-table)
+          // to prevent premature termination before workflow completes
+          const isComplexWorkflow = isVisualizationRequest || 
+            lastUserMessage.match(/\b(analyze|dashboard|chart|visual|multi|multiple|all|tables)\b/i) !== null;
+          
+          const maxSteps = isComplexWorkflow ? 50 : 30; // Higher limit for complex workflows
+          console.log(`[chat/POST] Using maxSteps=${maxSteps} (complex workflow: ${isComplexWorkflow})`);
+          
           const streamOptions = hasTools
             ? {
               toolsets: { sqlcl: mcpTools },
-              maxSteps: 30, // High limit to allow complex multi-table data generation to complete
+              maxSteps, // Adaptive limit based on workflow complexity
               onStepFinish: (step: { text: string; toolCalls: ToolCall[]; toolResults: Array<{ toolCallId: string; result: unknown }>; finishReason: string }) => {
                 console.log(`[chat] Step finished: ${step.toolCalls.length} tool calls, reason: ${step.finishReason}`);
+                
+                // Log warning when approaching maxSteps limit
+                const currentStep = step.toolCalls.length;
+                if (currentStep >= maxSteps * 0.8) {
+                  console.warn(`[chat] WARNING: Approaching maxSteps limit (${currentStep}/${maxSteps})`);
+                }
 
                 // Track connection state
                 if (conversationId && agentState) {
@@ -1049,6 +1064,9 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
 
               case 'done':
                 // Completion event
+                // CRITICAL FIX: Perform ALL post-processing BEFORE sending any completion signals
+                // This ensures the client receives all content before closing the stream
+                
                 // If this was a multi-step operation, send completion summary
                 if (currentStepNumber > 1) {
                   totalSteps = currentStepNumber;
@@ -1063,31 +1081,85 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
                   );
                 }
                 
-                // Post-processing: if AI refused to generate visualization but we have cached data, generate it now
+                // Post-processing: Generate visualization and analysis if requested
+                // IMPORTANT: This happens BEFORE finishReason is sent to prevent race conditions
                 {
-                  const refusalPhrases = ['cannot directly generate', 'cannot create visual', 'cannot generate html', 'i cannot create', 'unable to generate', 'not able to generate', 'cannot design'];
-                  const aiRefused = refusalPhrases.some(p => fullResponse.toLowerCase().includes(p));
                   const cachedData = conversationDataCache.get(conversationId || 'default');
                   
-                  if (aiRefused && cachedData && cachedData.length > 0 && isVisualizationRequest) {
-                    console.log('[chat/POST] AI refused visualization but we have cached data - generating directly');
+                  // Check if we should generate visualization
+                  const shouldGenerateViz = isVisualizationRequest && cachedData && cachedData.length > 0;
+                  
+                  // Check if AI refused to generate visualization
+                  const refusalPhrases = ['cannot directly generate', 'cannot create visual', 'cannot generate html', 'i cannot create', 'unable to generate', 'not able to generate', 'cannot design'];
+                  const aiRefused = refusalPhrases.some(p => fullResponse.toLowerCase().includes(p));
+                  
+                  if (shouldGenerateViz || (aiRefused && cachedData && cachedData.length > 0 && isVisualizationRequest)) {
+                    console.log('[chat/POST] Generating visualization and analysis for cached data');
                     try {
-                      const viz = await generateVisualization({ data: cachedData, type: 'auto', title: 'Data Visualization' });
-                      const visualizationData: Record<string, unknown> = { type: viz.type, title: 'Data Visualization' };
+                      // Step 1: Generate analysis insights
+                      const analysis = analyzeData({ data: cachedData, query: lastUserMessageOriginal });
+                      console.log('[chat/POST] Generated analysis:', {
+                        summary: analysis.summary,
+                        insightCount: analysis.insights.length,
+                        recommendationCount: analysis.recommendations.length
+                      });
+                      
+                      // Step 2: Generate visualization with analysis context
+                      const vizType = userIntent.visualizationType === 'dashboard' || userIntent.visualizationType === 'custom' 
+                        ? 'html' 
+                        : (userIntent.visualizationType || 'auto');
+                      
+                      const viz = await generateVisualization({ 
+                        data: cachedData, 
+                        type: vizType as any,
+                        title: analysis.summary || 'Data Visualization'
+                      });
+                      
+                      const visualizationData: Record<string, unknown> = { 
+                        type: viz.type, 
+                        title: analysis.summary || 'Data Visualization'
+                      };
+                      
                       if (typeof viz.content === 'string') {
                         visualizationData.html = viz.content;
                       } else if (typeof viz.content === 'object' && viz.content !== null) {
                         Object.assign(visualizationData, viz.content);
                       }
+                      
                       lastVisualization = visualizationData;
                       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ visualization: visualizationData })}\n\n`));
-                      console.log('[chat/POST] Sent override visualization after AI refusal');
+                      console.log('[chat/POST] Sent visualization with analysis context');
+                      
+                      // Step 3: Stream analysis insights as additional content
+                      if (analysis.insights.length > 0 || analysis.recommendations.length > 0) {
+                        let analysisText = '\n\n### 📊 Key Insights\n\n';
+                        analysis.insights.forEach(insight => {
+                          analysisText += `- ${insight}\n`;
+                        });
+                        
+                        if (analysis.recommendations.length > 0) {
+                          analysisText += '\n### 💡 Recommendations\n\n';
+                          analysis.recommendations.forEach(rec => {
+                            analysisText += `${rec}\n\n`;
+                          });
+                        }
+                        
+                        fullResponse += analysisText;
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: analysisText })}\n\n`));
+                        console.log('[chat/POST] Sent analysis insights and recommendations');
+                      }
+                      
+                      // CRITICAL: Add small delay to ensure all content is flushed to client
+                      // before sending finishReason signal
+                      await new Promise(resolve => setTimeout(resolve, 50));
                     } catch (e) {
-                      console.error('[chat/POST] Override visualization error:', e);
+                      console.error('[chat/POST] Visualization/analysis generation error:', e);
                     }
                   }
                 }
                 
+                // CRITICAL FIX: Only send finishReason AFTER all post-processing is complete
+                // This prevents the client from closing the stream prematurely
                 controller.enqueue(
                   encoder.encode(
                     `data: ${JSON.stringify({ finishReason: event.finishReason })}\n\n`

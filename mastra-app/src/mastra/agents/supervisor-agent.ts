@@ -53,25 +53,28 @@ Only set clarificationNeeded=true when the message is completely empty or a gene
 /**
  * Classify user intent and determine which agent(s) should handle the request.
  * Now returns clarificationNeeded=false in most cases to enable autonomous operation.
+ * Enhanced to better detect dashboard and visualization requests.
  */
 export function classifyUserIntent(message: string): TaskClassification {
   const lowerMessage = message.toLowerCase();
 
-  // Check for visualization keywords
-  const vizKeywords = ['chart', 'graph', 'plot', 'visual', 'dashboard', 'diagram', 'map', 'timeline', 'gallery', 'report', 'show', 'display', 'create', 'generate'];
+  // Enhanced visualization keywords detection
+  const vizKeywords = ['chart', 'graph', 'plot', 'visual', 'dashboard', 'diagram', 'map', 'timeline', 'gallery', 'report', 'show', 'display', 'create', 'generate', 'interactive', 'color-coded', 'alerts', 'metrics'];
   const wantsVisualization = vizKeywords.some(k => lowerMessage.includes(k));
 
-  // Check for specific chart types
-  const barKeywords = ['bar', 'column', 'histogram', 'comparison', 'compare'];
-  const lineKeywords = ['line', 'trend', 'time series', 'over time', 'growth', 'performance'];
-  const pieKeywords = ['pie', 'donut', 'proportion', 'percentage', 'distribution', 'breakdown'];
-  const mapKeywords = ['map', 'location', 'geographic', 'geo', 'where', 'place'];
-  const timelineKeywords = ['timeline', 'chronology', 'history', 'sequence', 'events'];
-  const galleryKeywords = ['gallery', 'photo', 'image', 'picture', 'grid'];
-  const dashboardKeywords = ['dashboard', 'interactive', 'filter', 'explore', 'report'];
+  // Check for specific chart types with better keyword matching
+  const barKeywords = ['bar', 'column', 'histogram', 'comparison', 'compare', 'top', 'bottom', 'ranking'];
+  const lineKeywords = ['line', 'trend', 'time series', 'over time', 'growth', 'performance', 'history'];
+  const pieKeywords = ['pie', 'donut', 'proportion', 'percentage', 'distribution', 'breakdown', 'share'];
+  const mapKeywords = ['map', 'location', 'geographic', 'geo', 'where', 'place', 'region'];
+  const timelineKeywords = ['timeline', 'chronology', 'history', 'sequence', 'events', 'evolution'];
+  const galleryKeywords = ['gallery', 'photo', 'image', 'picture', 'grid', 'similar'];
+  const dashboardKeywords = ['dashboard', 'interactive', 'filter', 'explore', 'report', 'overview', 'summary', 'critical', 'issues', 'alerts', 'metrics', 'kpi'];
 
   let visualizationType: TaskClassification['visualizationType'];
-  if (barKeywords.some(k => lowerMessage.includes(k))) {
+  if (dashboardKeywords.some(k => lowerMessage.includes(k))) {
+    visualizationType = 'dashboard';
+  } else if (barKeywords.some(k => lowerMessage.includes(k))) {
     visualizationType = 'bar';
   } else if (lineKeywords.some(k => lowerMessage.includes(k))) {
     visualizationType = 'line';
@@ -83,18 +86,16 @@ export function classifyUserIntent(message: string): TaskClassification {
     visualizationType = 'timeline';
   } else if (galleryKeywords.some(k => lowerMessage.includes(k))) {
     visualizationType = 'photo_gallery';
-  } else if (dashboardKeywords.some(k => lowerMessage.includes(k))) {
-    visualizationType = 'dashboard';
   } else if (wantsVisualization) {
     visualizationType = 'custom'; // Will auto-detect from data
   }
 
-  // Check for data/database keywords
-  const dataKeywords = ['show', 'get', 'fetch', 'query', 'select', 'data', 'table', 'orders', 'customers', 'sales', 'suppliers', 'products', 'delivery', 'performance', 'top', 'best', 'worst'];
+  // Enhanced data/database keywords
+  const dataKeywords = ['show', 'get', 'fetch', 'query', 'select', 'data', 'table', 'orders', 'customers', 'sales', 'suppliers', 'products', 'delivery', 'performance', 'top', 'best', 'worst', 'list', 'find', 'search'];
   const wantsData = dataKeywords.some(k => lowerMessage.includes(k));
 
-  // Check for analysis keywords
-  const analysisKeywords = ['analyze', 'analysis', 'insight', 'summary', 'statistics', 'average', 'total', 'count', 'highlight', 'trend'];
+  // Enhanced analysis keywords
+  const analysisKeywords = ['analyze', 'analysis', 'insight', 'summary', 'statistics', 'average', 'total', 'count', 'highlight', 'trend', 'pattern', 'anomaly', 'outlier', 'compare', 'comparison'];
   const wantsAnalysis = analysisKeywords.some(k => lowerMessage.includes(k));
 
   // AUTONOMOUS MODE: Never ask for clarification unless message is completely empty/ambiguous
@@ -111,14 +112,22 @@ export function classifyUserIntent(message: string): TaskClassification {
     if (wantsAnalysis) secondaryAgents.push('analysis');
   }
 
-  // Extract requirements from message
+  // Extract requirements from message with better pattern matching
   const extractedRequirements: TaskClassification['extractedRequirements'] = {};
 
-  // Try to extract column names (words after "by", "of", "for")
+  // Try to extract column names (words after "by", "of", "for", "with")
   const byMatch = lowerMessage.match(/by\s+(\w+)/);
   const ofMatch = lowerMessage.match(/of\s+(\w+)/);
+  const forMatch = lowerMessage.match(/for\s+(\w+)/);
   if (byMatch) extractedRequirements.columns = [byMatch[1]];
   if (ofMatch) extractedRequirements.dataSource = ofMatch[1];
+  if (forMatch && !extractedRequirements.dataSource) extractedRequirements.dataSource = forMatch[1];
+
+  // Extract chart title from message
+  const titleMatch = lowerMessage.match(/(?:show|create|generate|display)\s+(?:a\s+)?(?:dashboard|chart|graph|visual|report)?\s*(?:for|of|about)?\s+(.+?)(?:\s+(?:with|using|from|in)|\s*$)/);
+  if (titleMatch) {
+    extractedRequirements.chartTitle = titleMatch[1].trim();
+  }
 
   return {
     primaryAgent,
