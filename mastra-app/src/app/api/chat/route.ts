@@ -720,7 +720,14 @@ ${result.recommendations.map(r => `- ${r}`).join('\n')}`;
         }
 
         // If user wants visualization and we have existing data, generate it directly (bypass AI)
-        if (isVisualizationRequest && existingData && existingData.length > 0) {
+        // BUT only if the user is explicitly asking to visualize existing data, not asking a new question.
+        // New data questions (find, list, get, query, etc.) must go through the AI to execute SQL.
+        const isNewDataRequest = lastUserMessage.match(
+          /\b(find|list|get|show me|query|select|fetch|retrieve|check|what|which|how many|count|top|describe|explain|tell me|give me|run|execute|monitor|identify|diagnose|troubleshoot)\b/i
+        ) !== null;
+        const shouldBypassAI = isVisualizationRequest && existingData && existingData.length > 0 && !isNewDataRequest;
+        
+        if (shouldBypassAI) {
           console.log('[chat/POST] Taking bypass AI path - generating visualization from cached data');
           let vizType: 'auto' | 'bar' | 'line' | 'pie' | 'html' = 'auto';
           let vizTitle = 'Data Visualization';

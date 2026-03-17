@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Conversation, Message, Artifact, ArtifactModification, FileAttachment } from '@/types';
 import { MessageList } from './MessageList';
 import { MessageListAI } from './MessageListAI';
@@ -273,26 +273,14 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
         const arr = Array.isArray(data.messages) ? data.messages : [];
         console.log('[loadConversation] Processing', arr.length, 'messages');
         
-        const processedMessages = arr.map((m: {
-          id: string;
-          role: string;
-          content: string;
-          timestamp?: string;
-          toolCalls?: unknown;
-          toolCallId?: string;
-          toolNarratives?: unknown;
-          adaptationNarratives?: unknown;
-          visualization?: unknown;
-          analysis?: unknown;
-          toolErrors?: unknown;
-        }): UIMessage => {
-          const msg = {
-            id: m.id,
-            role: m.role as 'user' | 'assistant',
-            content: m.content,
-            timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        const processedMessages = arr.map((m: Record<string, unknown>): UIMessage => {
+          const msg: UIMessage = {
+            id: String(m.id),
+            role: String(m.role) as 'user' | 'assistant',
+            content: String(m.content || ''),
+            timestamp: m.timestamp ? new Date(m.timestamp as string) : new Date(),
             toolCalls: m.toolCalls as Message['toolCalls'],
-            toolCallId: m.toolCallId,
+            toolCallId: m.toolCallId as string | undefined,
             toolNarratives: m.toolNarratives as Message['toolNarratives'],
             adaptationNarratives: m.adaptationNarratives as Message['adaptationNarratives'],
             visualization: m.visualization as Message['visualization'],
@@ -304,10 +292,18 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
           }
           
           // Reconstruct contentParts for messages (Requirement 2.1, 2.2)
-          // This preserves the original execution order when loading from history
+          // Uses toolNarratives to restore text↔tool interleaving from history
+          if (msg.role === 'assistant' && msg.toolCalls?.length) {
+            console.log(`[loadConversation] Message ${msg.id} has ${msg.toolCalls.length} toolCalls, ${msg.toolNarratives?.length || 0} narratives`);
+            console.log(`[loadConversation] Content preview: "${msg.content.slice(0, 200)}..."`);
+            msg.toolCalls.forEach((tc, i) => {
+              console.log(`[loadConversation] ToolCall ${i}: ${tc.name} (${tc.id}), args:`, tc.arguments);
+            });
+          }
           const reconstructed = reconstructContentParts(msg);
           if (reconstructed.contentParts) {
-            console.log(`[loadConversation] Reconstructed ${reconstructed.contentParts.length} contentParts for message ${msg.id}`);
+            console.log(`[loadConversation] Reconstructed ${reconstructed.contentParts.length} contentParts for message ${msg.id}:`,
+              reconstructed.contentParts.map(p => p.type === 'text' ? `text(${p.text.slice(0, 40)}...)` : `tool(${p.toolCall.name})`));
           }
           
           return reconstructed;
@@ -494,7 +490,7 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
 
     try {
       const allMsgs = [...messages, userMsg]
-        .filter((m) => m.role === 'user' || m.content.trim())
+        .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content?.trim()))
         .map((m) => ({ 
           id: m.id, 
           role: m.role, 
@@ -590,6 +586,8 @@ export function CopilotChatUI({ appTitle = 'OCI GenAI Chat' }: { appTitle?: stri
                 }
                 return u;
               });
+            } else if (p.toolResult) {
+              // Tool results are handled server-side; no client-side storage needed
             } else if (p.tool_narrative) {
               setMessages((prev) => {
                 const u = [...prev];

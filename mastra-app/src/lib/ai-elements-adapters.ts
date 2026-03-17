@@ -105,7 +105,7 @@ export function extractContentParts(message: Message): Array<
   | { type: 'text'; text: string }
   | { type: 'tool'; toolCall: ToolCall }
 > {
-  // If message has contentParts, use them directly
+  // If message has contentParts, use them directly (live streaming or reconstructed)
   if (message.contentParts && message.contentParts.length > 0) {
     return message.contentParts;
   }
@@ -116,12 +116,10 @@ export function extractContentParts(message: Message): Array<
     | { type: 'tool'; toolCall: ToolCall }
   > = [];
 
-  // Add text content first
   if (message.content && message.content.trim()) {
     parts.push({ type: 'text', text: message.content });
   }
 
-  // Add tool calls at the end
   if (message.toolCalls && message.toolCalls.length > 0) {
     message.toolCalls.forEach((toolCall) => {
       parts.push({ type: 'tool', toolCall });

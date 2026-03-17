@@ -551,151 +551,192 @@ export class OCIGenAIProvider {
   }
 
   /**
+  /**
    * Build generic chat request for Google/xAI models.
    * Uses the OCI GenAI GENERIC API format with proper SDK types.
-   * The SDK expects properly typed Message and TextContent objects.
-   * 
-   * IMPORTANT: Assistant messages with toolCalls MUST be followed by corresponding
-   * tool messages. If not, we strip the toolCalls to avoid API errors when
-   * switching models mid-conversation.
+   *
+   * Gemini has strict conversation structure rules:
+   * 1. ASSISTANT messages with toolCalls MUST be immediately followed by
+   *    exactly one TOOL message per tool call (no more, no less).
+   * 2. No consecutive USER messages — they must be merged.
+   * 3. Orphaned tool calls (no matching TOOL message) must be stripped and
+   *    the assistant message converted to plain text.
+   * 4. Orphaned TOOL messages (no preceding ASSISTANT with matching toolCall)
+   *    must be dropped.
    */
   private buildGenericChatRequest(
     messages: ChatMessage[],
-    tools?: Tool[]
+    tools?: Tool[],
+    maxTokens?: number
   ): GenerativeAiInference.models.GenericChatRequest {
-    // First, collect all tool message IDs to know which toolCalls have responses
-    const toolMessageIds = new Set<string>();
-    for (const msg of messages) {
-      if (msg.role === 'tool' && msg.toolCallId) {
-        toolMessageIds.add(msg.toolCallId);
+      // ── Step 1: Build a lookup of tool-result messages keyed by toolCallId ──
+      const toolResultsByCallId = new Map<string, ChatMessage>();
+      for (const msg of messages) {
+        if (msg.role === 'tool' && msg.toolCallId) {
+          toolResultsByCallId.set(msg.toolCallId, msg);
+        }
       }
-    }
-    console.log('[OCIGenAI] Tool message IDs in conversation:', Array.from(toolMessageIds));
-    
-    // Build messages array using proper SDK types
-    const genericMessages: GenerativeAiInference.models.Message[] = [];
-    
-    // Add system message if preamble is set
-    if (this.systemPreamble) {
-      genericMessages.push({
-        role: 'SYSTEM',
-        content: [
-          {
+
+      // ── Step 2: Build a sanitised intermediate message list ──
+      // We walk through the input messages and produce a clean sequence of
+      // { role, content, toolCalls? } objects where every assistant-with-tools
+      // entry is immediately followed by its matching tool results, and
+      // everything else is plain user/assistant text.
+      type SanitisedMsg =
+        | { role: 'system'; content: string }
+        | { role: 'user'; content: string }
+        | { role: 'assistant'; content: string; toolCalls?: ChatMessage['toolCalls'] }
+        | { role: 'tool'; content: string; toolCallId: string };
+
+      const sanitised: SanitisedMsg[] = [];
+
+      for (const msg of messages) {
+        if (msg.role === 'system') {
+          sanitised.push({ role: 'user', content: msg.content || '' });
+        } else if (msg.role === 'user') {
+          sanitised.push({ role: 'user', content: msg.content || '' });
+        } else if (msg.role === 'assistant') {
+          if (msg.toolCalls && msg.toolCalls.length > 0) {
+            // Check if ALL tool calls have matching tool results
+            const allHaveResults = msg.toolCalls.every(tc => toolResultsByCallId.has(tc.id));
+            if (allHaveResults) {
+              // Keep the assistant message with tool calls
+              sanitised.push({
+                role: 'assistant',
+                content: msg.content || '',
+                toolCalls: msg.toolCalls,
+              });
+              // Immediately append the matching tool results in order
+              for (const tc of msg.toolCalls) {
+                const toolMsg = toolResultsByCallId.get(tc.id)!;
+                sanitised.push({
+                  role: 'tool',
+                  content: toolMsg.content || '',
+                  toolCallId: tc.id,
+                });
+                // Remove from map so we don't add it again
+                toolResultsByCallId.delete(tc.id);
+              }
+            } else {
+              // Strip tool calls — convert to plain text assistant message
+              const stripped = msg.toolCalls.filter(tc => !toolResultsByCallId.has(tc.id)).map(tc => tc.id);
+              console.log('[OCIGenAI] Stripping orphaned toolCalls (no tool messages):', stripped);
+              sanitised.push({
+                role: 'assistant',
+                content: msg.content || 'I used a tool to help with that request.',
+              });
+            }
+          } else {
+            // Plain assistant message
+            if (msg.content?.trim()) {
+              sanitised.push({ role: 'assistant', content: msg.content });
+            }
+          }
+        }
+        // Skip standalone 'tool' messages — they are handled above when paired
+        // with their assistant message. Any remaining ones are orphaned.
+      }
+
+      // ── Step 3: Merge consecutive USER messages ──
+      const merged: SanitisedMsg[] = [];
+      for (const msg of sanitised) {
+        const prev = merged[merged.length - 1];
+        if (msg.role === 'user' && prev?.role === 'user') {
+          prev.content = prev.content + '\n\n' + msg.content;
+        } else {
+          merged.push({ ...msg });
+        }
+      }
+
+      // ── Step 4: Ensure proper alternation (no consecutive same-role) ──
+      // After merging users, we might still have consecutive assistants.
+      // Merge consecutive assistant messages (without tool calls) as well.
+      const alternated: SanitisedMsg[] = [];
+      for (const msg of merged) {
+        const prev = alternated[alternated.length - 1];
+        if (msg.role === 'assistant' && !('toolCalls' in msg && msg.toolCalls) &&
+            prev?.role === 'assistant' && !('toolCalls' in prev && prev.toolCalls)) {
+          prev.content = prev.content + '\n\n' + msg.content;
+        } else {
+          alternated.push(msg);
+        }
+      }
+
+      // ── Step 5: Convert to OCI GenAI SDK message types ──
+      const genericMessages: GenerativeAiInference.models.Message[] = [];
+
+      // Add system preamble
+      if (this.systemPreamble) {
+        genericMessages.push({
+          role: 'SYSTEM',
+          content: [{
             type: 'TEXT',
             text: this.systemPreamble,
-          } as GenerativeAiInference.models.TextContent,
-        ],
-      } as GenerativeAiInference.models.SystemMessage);
-    }
-    
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-      
-      if (msg.role === 'system') {
-        // System messages (e.g., error retry context) are injected as USER messages
-        // since the generic format uses SYSTEM only for the preamble
-        genericMessages.push({
-          role: 'USER',
-          content: [
-            {
-              type: 'TEXT',
-              text: msg.content || '',
-            } as GenerativeAiInference.models.TextContent,
-          ],
-        } as GenerativeAiInference.models.UserMessage);
-      } else if (msg.role === 'user') {
-        genericMessages.push({
-          role: 'USER',
-          content: [
-            {
-              type: 'TEXT',
-              text: msg.content || '',
-            } as GenerativeAiInference.models.TextContent,
-          ],
-        } as GenerativeAiInference.models.UserMessage);
-      } else if (msg.role === 'assistant') {
-        // Handle assistant messages with tool calls
-        const assistantMsg: GenerativeAiInference.models.AssistantMessage = {
-          role: 'ASSISTANT',
-          content: msg.content ? [
-            {
+          } as GenerativeAiInference.models.TextContent],
+        } as GenerativeAiInference.models.SystemMessage);
+      }
+
+      for (const msg of alternated) {
+        if (msg.role === 'user') {
+          genericMessages.push({
+            role: 'USER',
+            content: [{
               type: 'TEXT',
               text: msg.content,
-            } as GenerativeAiInference.models.TextContent,
-          ] : undefined, // Set to undefined when responding to tool calls per SDK docs
-        };
-        
-        // Only add tool calls if ALL of them have corresponding tool messages
-        // This prevents errors when switching models mid-conversation where
-        // tool results weren't stored in the database
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          const allToolCallsHaveResponses = msg.toolCalls.every(tc => toolMessageIds.has(tc.id));
-          
-          if (allToolCallsHaveResponses) {
+            } as GenerativeAiInference.models.TextContent],
+          } as GenerativeAiInference.models.UserMessage);
+        } else if (msg.role === 'assistant') {
+          const assistantMsg: GenerativeAiInference.models.AssistantMessage = {
+            role: 'ASSISTANT',
+            content: msg.content ? [{
+              type: 'TEXT',
+              text: msg.content,
+            } as GenerativeAiInference.models.TextContent] : undefined,
+          };
+          if (msg.toolCalls && msg.toolCalls.length > 0) {
             assistantMsg.toolCalls = msg.toolCalls.map(tc => ({
               id: tc.id,
               type: 'FUNCTION',
               name: tc.name,
               arguments: JSON.stringify(tc.arguments || {}),
             } as GenerativeAiInference.models.FunctionCall));
-            console.log('[OCIGenAI] Assistant message tool calls (with responses):', assistantMsg.toolCalls.map(tc => tc.id));
-          } else {
-            // Strip orphaned toolCalls - they don't have corresponding tool messages
-            const orphanedIds = msg.toolCalls.filter(tc => !toolMessageIds.has(tc.id)).map(tc => tc.id);
-            console.log('[OCIGenAI] Stripping orphaned toolCalls (no tool messages):', orphanedIds);
-            // Ensure content is set when we strip toolCalls
-            if (!assistantMsg.content) {
-              assistantMsg.content = [
-                {
-                  type: 'TEXT',
-                  text: msg.content || 'I attempted to use a tool.',
-                } as GenerativeAiInference.models.TextContent,
-              ];
-            }
           }
-        }
-        
-        genericMessages.push(assistantMsg);
-      } else if (msg.role === 'tool') {
-        // Handle tool result messages
-        console.log('[OCIGenAI] Adding tool message with toolCallId:', msg.toolCallId);
-        genericMessages.push({
-          role: 'TOOL',
-          toolCallId: msg.toolCallId,
-          content: [
-            {
+          genericMessages.push(assistantMsg);
+        } else if (msg.role === 'tool') {
+          genericMessages.push({
+            role: 'TOOL',
+            toolCallId: msg.toolCallId,
+            content: [{
               type: 'TEXT',
-              text: msg.content || '',
-            } as GenerativeAiInference.models.TextContent,
-          ],
-        } as GenerativeAiInference.models.ToolMessage);
+              text: msg.content,
+            } as GenerativeAiInference.models.TextContent],
+          } as GenerativeAiInference.models.ToolMessage);
+        }
       }
+
+      // Log the sanitised request
+      console.log('[OCIGenAI] Generic request:', JSON.stringify({
+        apiFormat: 'GENERIC',
+        messagesCount: genericMessages.length,
+        messageRoles: genericMessages.map(m => m.role),
+      }));
+
+      // Build the request
+      const request: GenerativeAiInference.models.GenericChatRequest = {
+        apiFormat: 'GENERIC',
+        messages: genericMessages,
+        maxTokens: maxTokens || 4096,
+        temperature: 0,
+        isStream: false,
+      };
+
+      if (tools && tools.length > 0) {
+        request.tools = this.convertToolsToGenericFormat(tools);
+        console.log('[OCIGenAI] Added tools for generic model:', request.tools?.length);
+      }
+
+      return request;
     }
-    
-    // Build the request object using SDK types
-    const request: GenerativeAiInference.models.GenericChatRequest = {
-      apiFormat: 'GENERIC',
-      messages: genericMessages,
-      maxTokens: 2048,
-      temperature: 0,
-      isStream: false,
-    };
-    
-    // Log the request for debugging
-    console.log('[OCIGenAI] Generic request:', JSON.stringify({
-      apiFormat: 'GENERIC',
-      messagesCount: genericMessages.length,
-      messageRoles: genericMessages.map(m => m.role),
-    }, null, 2));
-    
-    // Add tools if provided (generic format supports tools)
-    if (tools && tools.length > 0) {
-      request.tools = this.convertToolsToGenericFormat(tools);
-      console.log('[OCIGenAI] Added tools for generic model:', request.tools?.length);
-    }
-    
-    return request;
-  }
 
   /**
    * Convert tools to OCI Generic format (OpenAI-compatible).
@@ -945,6 +986,14 @@ export class OCIGenAIProvider {
     }
 
     console.log('[OCIGenAI] Parsed content:', content?.slice(0, 200));
+
+    // If the model returned malformed_function_call with no content, provide a
+    // fallback message so the user isn't left with a blank response
+    if (finishReason === 'malformed_function_call' && !content && !toolCalls) {
+      content = 'I encountered an issue processing that request. Could you please rephrase your question or try again?';
+      console.log('[OCIGenAI] Providing fallback content for malformed_function_call');
+    }
+
     return {
       content,
       toolCalls,
@@ -969,7 +1018,7 @@ export class OCIGenAIProvider {
       
       if (apiFormat === 'GENERIC') {
         // Use generic format for Google/xAI models
-        chatRequest = this.buildGenericChatRequest(messages, tools);
+        chatRequest = this.buildGenericChatRequest(messages, tools, maxTokens);
         console.log(`[OCIGenAI] Using GENERIC format for model: ${modelId}`);
         console.log(`[OCIGenAI] Request messages count: ${(chatRequest as { messages?: unknown[] }).messages?.length}`);
       } else {
@@ -1031,10 +1080,37 @@ export class OCIGenAIProvider {
       };
 
       // Execute request with retry logic for rate limiting
-      const response = await this.executeWithRetry(
+      // Also retry on malformed_function_call (transient model error)
+      const MAX_MALFORMED_RETRIES = 2;
+      let malformedRetries = 0;
+      let finalResponse = await this.executeWithRetry(
         () => client.chat({ chatDetails }),
         'chat'
       );
+
+      // For GENERIC format, check for malformed_function_call and retry
+      if (apiFormat === 'GENERIC') {
+        while (malformedRetries < MAX_MALFORMED_RETRIES) {
+          if (!finalResponse) break;
+          const tempResult = (finalResponse as unknown as Record<string, unknown>).chatResult as Record<string, unknown> | undefined;
+          const tempChatResp = tempResult?.chatResponse as Record<string, unknown> | undefined;
+          const tempChoices = tempChatResp?.choices as Array<Record<string, unknown>> | undefined;
+          const tempFr = tempChoices?.[0]?.['finish-reason'] || tempChoices?.[0]?.finishReason || tempChoices?.[0]?.['finish_reason'];
+          if (tempFr === 'malformed_function_call') {
+            malformedRetries++;
+            console.log(`[OCIGenAI] Got malformed_function_call, retrying (${malformedRetries}/${MAX_MALFORMED_RETRIES})...`);
+            await this.sleep(500 * malformedRetries);
+            finalResponse = await this.executeWithRetry(
+              () => client.chat({ chatDetails }),
+              'chat'
+            );
+          } else {
+            break;
+          }
+        }
+      }
+
+      const response = finalResponse;
 
       if (!response) {
         throw new OCIGenAIProviderError('No response received from OCI GenAI service');
